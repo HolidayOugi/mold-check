@@ -197,11 +197,13 @@ MoldCheckMetrics moldCheck(
 
 		depthCells =
 			smoothMissingDepthCells(
-				makeDepthCells(cells, clampedCells),
+				makeDepthCells(cells, clampedCells, direction),
 				cells,
 				clampedCells,
+				direction,
 				grid,
-				1000);
+				5,
+				5000);
 
 	}
 
@@ -255,7 +257,7 @@ MoldCheckMetrics moldCheck(
 		std::cout << "Validating clamped cells...\n";
 		std::cout.flush();
 
-		validateClampedCells(clampedCells, allCells, direction, CONE_COS_THRESHOLD, EPS);
+		PolyMesh violatingPointsMesh = validateClampedCells(depthCells, allCells, direction, CONE_COS_THRESHOLD, EPS);
 		
 		PolyMesh hitPointsMesh;
 		hitPointsMesh.enablePerVertexColor();
@@ -286,7 +288,7 @@ MoldCheckMetrics moldCheck(
 			addColoredPoint(
 				depthPointsMesh,
 				depthPoint,
-				depthCells[i].hasHit ? Color::Cyan : Color::White);
+				depthCells[i].hasHit && cells[i].distance == clampedCells[i].distance ? Color::Cyan : Color::White);
 		}
 
 		PolyMesh largestComponentMesh;
@@ -305,7 +307,7 @@ MoldCheckMetrics moldCheck(
 			addQuadPrism(remainingMoldMesh, clampedCells[i].cellCorners, clampedCells[i].distance, cells[i].distance, direction, vcl::Color::Red);
 		}
 
-		const TriMesh moldSurfaceMesh = createMoldSurface(clampedCells, grid, direction);
+		const TriMesh moldSurfaceMesh = createMoldSurface(depthCells, grid, direction);
 
 		
 		const std::filesystem::path debugOutputDir =
@@ -331,6 +333,7 @@ MoldCheckMetrics moldCheck(
 		saveMesh(remainingMoldMesh, base + "_remaining_mold.ply");
 		saveMesh(moldSurfaceMesh, base + "_mold_surface.ply");
 		saveMesh(largestComponentMesh, base + "_largest_component_points.ply");
+		saveMesh(violatingPointsMesh, base + "_violating_points.ply");
 		
 		std::cout << "Clamped points: " << clampedPointsMesh.vertexCount() << "\n";
 		std::cout << "Depth points: " << depthPointsMesh.vertexCount() << "\n";
@@ -388,7 +391,7 @@ int main()
     PolyMesh m = loadMesh<PolyMesh>(MESHES_PATH "/bimba_enlarged.ply");
 
 
-    std::vector<double> gridCellSideLengths = {0.4, 0.4};
+    std::vector<double> gridCellSideLengths = {0.3, 0.3};
 
 	const double coneAngleDegrees = 5.0;
 

@@ -368,7 +368,8 @@ static CellData computeClampedCell(
 
 static std::vector<CellData> makeDepthCells(
 	const std::vector<CellData>& cells,
-	const std::vector<CellData>& clampedCells)
+	const std::vector<CellData>& clampedCells,
+	const vcl::Point3d& direction)
 {
 	if (cells.size() != clampedCells.size()) {
 		return {};
@@ -381,6 +382,9 @@ static std::vector<CellData> makeDepthCells(
 	for (vcl::uint i = 0; i < cells.size(); ++i) {
 		if (cells[i].hasHit) {
 			depthCells[i] = clampedCells[i];
+			depthCells[i].hitPoints = {
+				depthCells[i].cellCenter +
+				direction * depthCells[i].distance};
 			distanceSum += depthCells[i].distance;
 			++hitCount;
 		}
@@ -398,6 +402,8 @@ static std::vector<CellData> makeDepthCells(
 	for (CellData& depthCell : depthCells) {
 		if (!depthCell.hasHit) {
 			depthCell.distance = averageDistance;
+			depthCell.hitPoints = {
+				depthCell.cellCenter + direction * depthCell.distance};
 		}
 	}
 
@@ -408,7 +414,9 @@ static std::vector<CellData> smoothMissingDepthCells(
 	const std::vector<CellData>& depthCells,
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& clampedCells,
+	const vcl::Point3d& direction,
 	const GridChoice& grid,
+	vcl::uint squareSize,
 	vcl::uint maxIterations)
 {
 	using namespace vcl;
@@ -423,6 +431,7 @@ static std::vector<CellData> smoothMissingDepthCells(
 	std::iota(allCells.begin(), allCells.end(), 0);
 
 	std::vector<CellData> currentDepthCells = depthCells;
+	const int radius = static_cast<int>(squareSize / 2);
 
 	for (uint iteration = 0; iteration < maxIterations; ++iteration) {
 		std::vector<CellData> nextDepthCells = currentDepthCells;
@@ -439,14 +448,21 @@ static std::vector<CellData> smoothMissingDepthCells(
 			uint distanceCount = 0;
 			double maxAllowedDistance = std::numeric_limits<double>::infinity();
 
-			const uint minRow = (centerRow > 0) ? centerRow - 1 : centerRow;
-			const uint minCol = (centerCol > 0) ? centerCol - 1 : centerCol;
-			const uint maxRow = std::min(centerRow + 1, grid.rows - 1);
-			const uint maxCol = std::min(centerCol + 1, grid.cols - 1);
+			for (int rowOffset = -radius; rowOffset <= radius; ++rowOffset) {
+				for (int colOffset = -radius; colOffset <= radius; ++colOffset) {
+					const int row = static_cast<int>(centerRow) + rowOffset;
+					const int col = static_cast<int>(centerCol) + colOffset;
 
-			for (uint row = minRow; row <= maxRow; ++row) {
-				for (uint col = minCol; col <= maxCol; ++col) {
-					const uint neighborIdx = row * grid.cols + col;
+					if (row < 0 ||
+						col < 0 ||
+						row >= static_cast<int>(grid.rows) ||
+						col >= static_cast<int>(grid.cols)) {
+						continue;
+					}
+
+					const uint neighborIdx =
+						static_cast<uint>(row) * grid.cols +
+						static_cast<uint>(col);
 
 					if (neighborIdx == idx) {
 						continue;
@@ -475,6 +491,9 @@ static std::vector<CellData> smoothMissingDepthCells(
 			}
 
 			nextDepthCells[idx].distance = newDistance;
+			nextDepthCells[idx].hitPoints = {
+				nextDepthCells[idx].cellCenter +
+				direction * nextDepthCells[idx].distance};
 		});
 
 		currentDepthCells = std::move(nextDepthCells);

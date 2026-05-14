@@ -15,7 +15,16 @@
 #include <vclib/io.h>
 #include <vclib/meshes.h>
 
-static void validateClampedCells(
+static void addColoredPoint(
+	vcl::PolyMesh& mesh,
+	const vcl::Point3d& point,
+	const vcl::Color& color)
+{
+	const vcl::uint vId = mesh.addVertex(point);
+	mesh.vertex(vId).color() = color;
+}
+
+vcl::PolyMesh validateClampedCells(
 	const std::vector<CellData>& clampedCells,
 	const std::vector<vcl::uint>& allCells,
 	const vcl::Point3d& direction,
@@ -25,16 +34,19 @@ static void validateClampedCells(
 	using namespace vcl;
 
 	std::atomic<uint> violatingPoints{0};
+	PolyMesh violatingPointsMesh;
+	violatingPointsMesh.enablePerVertexColor();
 
 	vcl::parallelFor(allCells, [&](uint i) {
-		if (!clampedCells[i].hasHit) {
-			return;
-		}
+		//if (!clampedCells[i].hasHit) {
+		//	return;
+		//}
 
 		const Point3d& point = clampedCells[i].hitPoints[0];
 
 		for (uint j = 0; j < clampedCells.size(); ++j) {
-			if (i == j || !clampedCells[j].hasHit) {
+			//if (i == j || !clampedCells[j].hasHit) {
+			if (i == j) {
 				continue;
 			}
 
@@ -52,6 +64,8 @@ static void validateClampedCells(
 
 			if (cosVal > coneCosThreshold + eps) {
 				violatingPoints.fetch_add(1);
+				addColoredPoint(violatingPointsMesh, point, Color::Magenta);
+				std::cout << "Violation between cells " << i << " and " << j << ": cosVal = " << cosVal << ", cosThreshold = " << coneCosThreshold + eps << "\n";
 				return;
 			}
 		}
@@ -64,6 +78,7 @@ static void validateClampedCells(
 			  << " (violating points: " << totalViolations << ")\n";
 
 	std::cout.flush();
+	return violatingPointsMesh;
 }
 
 static vcl::uint addFaceWithColor(
@@ -304,15 +319,6 @@ static void addSegment(
 	const vcl::uint vb = em.addVertex(b);
 
 	em.addEdge(va, vb);
-}
-
-static void addColoredPoint(
-	vcl::PolyMesh& mesh,
-	const vcl::Point3d& point,
-	const vcl::Color& color)
-{
-	const vcl::uint vId = mesh.addVertex(point);
-	mesh.vertex(vId).color() = color;
 }
 
 static vcl::TriMesh makeDebugPlaneMesh(
