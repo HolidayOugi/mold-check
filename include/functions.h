@@ -366,6 +366,123 @@ static CellData computeClampedCell(
 	return result;
 }
 
+static std::vector<CellData> makeDepthCells(
+	const std::vector<CellData>& cells,
+	const std::vector<CellData>& clampedCells)
+{
+	if (cells.size() != clampedCells.size()) {
+		return {};
+	}
+
+	std::vector<CellData> depthCells = cells;
+	double distanceSum = 0.0;
+	vcl::uint hitCount = 0;
+
+	for (vcl::uint i = 0; i < cells.size(); ++i) {
+		if (cells[i].hasHit) {
+			depthCells[i] = clampedCells[i];
+			distanceSum += depthCells[i].distance;
+			++hitCount;
+		}
+		else {
+			depthCells[i].hasHit = false;
+		}
+	}
+
+	if (hitCount == 0) {
+		return depthCells;
+	}
+
+	const double averageDistance = distanceSum / hitCount;
+
+	for (CellData& depthCell : depthCells) {
+		if (!depthCell.hasHit) {
+			depthCell.distance = averageDistance;
+		}
+	}
+
+	return depthCells;
+}
+
+static std::vector<CellData> smoothMissingDepthCells(
+	const std::vector<CellData>& depthCells,
+	const std::vector<CellData>& cells,
+	const std::vector<CellData>& clampedCells,
+	const GridChoice& grid,
+	vcl::uint maxIterations)
+{
+	using namespace vcl;
+
+	if (depthCells.size() != cells.size() ||
+		depthCells.size() != clampedCells.size() ||
+		depthCells.size() != grid.rows * grid.cols) {
+		return {};
+	}
+
+	std::vector<uint> allCells(depthCells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+
+	std::vector<CellData> currentDepthCells = depthCells;
+
+	for (uint iteration = 0; iteration < maxIterations; ++iteration) {
+		std::vector<CellData> nextDepthCells = currentDepthCells;
+
+		parallelFor(allCells, [&](uint idx) {
+			if (currentDepthCells[idx].hasHit) {
+				return;
+			}
+
+			const uint centerRow = idx / grid.cols;
+			const uint centerCol = idx % grid.cols;
+
+			double distanceSum = 0.0;
+			uint distanceCount = 0;
+			double maxAllowedDistance = std::numeric_limits<double>::infinity();
+
+			const uint minRow = (centerRow > 0) ? centerRow - 1 : centerRow;
+			const uint minCol = (centerCol > 0) ? centerCol - 1 : centerCol;
+			const uint maxRow = std::min(centerRow + 1, grid.rows - 1);
+			const uint maxCol = std::min(centerCol + 1, grid.cols - 1);
+
+			for (uint row = minRow; row <= maxRow; ++row) {
+				for (uint col = minCol; col <= maxCol; ++col) {
+					const uint neighborIdx = row * grid.cols + col;
+
+					if (neighborIdx == idx) {
+						continue;
+					}
+
+					distanceSum += currentDepthCells[neighborIdx].distance;
+					++distanceCount;
+
+					if (cells[neighborIdx].hasHit &&
+						clampedCells[neighborIdx].hasHit &&
+						clampedCells[neighborIdx].distance != cells[neighborIdx].distance) {
+						maxAllowedDistance =
+							std::min(maxAllowedDistance, clampedCells[neighborIdx].distance);
+					}
+				}
+			}
+
+			if (distanceCount == 0) {
+				return;
+			}
+
+			double newDistance = distanceSum / distanceCount;
+
+			if (maxAllowedDistance < std::numeric_limits<double>::infinity()) {
+				newDistance = std::min(newDistance, maxAllowedDistance);
+			}
+
+			nextDepthCells[idx].distance = newDistance;
+		});
+
+		currentDepthCells = std::move(nextDepthCells);
+	}
+
+	return currentDepthCells;
+}
+
 static ConnectedComponentData largestConnectedComponent(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& clampedCells,

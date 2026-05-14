@@ -191,6 +191,20 @@ MoldCheckMetrics moldCheck(
 		percentClamped,
 		percentHidden};
 
+	std::vector<CellData> depthCells = cells;
+
+	if (debug) {
+
+		depthCells =
+			smoothMissingDepthCells(
+				makeDepthCells(cells, clampedCells),
+				cells,
+				clampedCells,
+				grid,
+				1000);
+
+	}
+
 	std::vector<CellData> moldClampedCells = clampedCells;
 
 	if (mold != nullptr) {
@@ -258,58 +272,21 @@ MoldCheckMetrics moldCheck(
 			addColoredPoint(clampedonlyPointsMesh, clampedCells[i].hitPoints[0], Color::Red);
 		}
 		
-		PolyMesh clampednohitPointsMesh;
-		clampednohitPointsMesh.enablePerVertexColor();
-		for (uint i = 0; i < clampedCells.size(); ++i) {
-			if (cells[i].hasHit) continue;
-			if (cells[i].distance == clampedCells[i].distance) continue;
-			addColoredPoint(clampednohitPointsMesh, clampedCells[i].hitPoints[0], Color::White);
-		}
-		
 		PolyMesh clampedPointsMesh;
 		clampedPointsMesh.enablePerVertexColor();
 		for (uint i = 0; i < clampedCells.size(); ++i) {
 			addColoredPoint(clampedPointsMesh, clampedCells[i].hitPoints[0], Color::Blue);
 		}
 
-		PolyMesh moldClampedPointsMesh;
-		moldClampedPointsMesh.enablePerVertexColor();
-		for (uint i = 0; i < moldClampedCells.size(); ++i) {
-			if (!moldClampedCells[i].hasHit) continue;
-			addColoredPoint(moldClampedPointsMesh, moldClampedCells[i].hitPoints[0], Color::Cyan);
-		}
-
-		PolyMesh thirdHitPointsMesh;
-		thirdHitPointsMesh.enablePerVertexColor();
-		for (uint i = 0; i < cells.size(); ++i) {
-			if (cells[i].hitPoints.size() <= 2) continue;
-			addColoredPoint(thirdHitPointsMesh, cells[i].hitPoints[2], Color::Magenta);
-		}
-
-		PolyMesh lastHitPointsMesh;
-		lastHitPointsMesh.enablePerVertexColor();
-		for (uint i = 0; i < cells.size(); ++i) {
-			if (!cells[i].hasHit) continue;
-			addColoredPoint(lastHitPointsMesh, cells[i].hitPoints.back(), Color::Green);
-		}
-
-		PolyMesh oddHitPointsMesh;
-		oddHitPointsMesh.enablePerVertexColor();
-		uint oddHitCells = 0;
-		for (uint i = 0; i < cells.size(); ++i) {
-			if (!cells[i].hasHit) continue;
-			if (cells[i].hitPoints.size() % 2 == 0) continue;
-			++oddHitCells;
-			for (const Point3d& hitPoint : cells[i].hitPoints) {
-				addColoredPoint(oddHitPointsMesh, hitPoint, Color::LightYellow);
-			}
-		}
-		
-		PolyMesh missedPointsMesh;
-		missedPointsMesh.enablePerVertexColor();
-		for (uint i = 0; i < clampedCells.size(); ++i) {
-			if (clampedCells[i].hasHit) continue;
-			addColoredPoint(missedPointsMesh, clampedCells[i].hitPoints[0], Color::Green);
+		PolyMesh depthPointsMesh;
+		depthPointsMesh.enablePerVertexColor();
+		for (uint i = 0; i < depthCells.size(); ++i) {
+			const Point3d depthPoint =
+				depthCells[i].cellCenter + direction * depthCells[i].distance;
+			addColoredPoint(
+				depthPointsMesh,
+				depthPoint,
+				depthCells[i].hasHit ? Color::Cyan : Color::White);
 		}
 
 		PolyMesh largestComponentMesh;
@@ -321,29 +298,14 @@ MoldCheckMetrics moldCheck(
 		const TriMesh planeMesh =
 			makeDebugPlaneMesh(grid, planePoint, u, v);
 
-		TriMesh ClampedPrismMesh;
-		for (uint i = 0; i < clampedCells.size(); ++i) {
-			if (!clampedCells[i].hasHit) continue;
-			addQuadPrism(ClampedPrismMesh, clampedCells[i].cellCorners, -EPS, clampedCells[i].distance, direction, vcl::Color::White);
-		}
-		
 		TriMesh remainingMoldMesh;
-		EdgeMesh segmentsRemainingMold;
 		for (uint i = 0; i < clampedCells.size(); ++i) {
 			if (!cells[i].hasHit) continue;
 			if (cells[i].distance == clampedCells[i].distance) continue;
 			addQuadPrism(remainingMoldMesh, clampedCells[i].cellCorners, clampedCells[i].distance, cells[i].distance, direction, vcl::Color::Red);
-			addSegment(
-				segmentsRemainingMold,
-				clampedCells[i].hitPoints[0],
-				cells[i].hitPoints[0]);
 		}
 
 		const TriMesh moldSurfaceMesh = createMoldSurface(clampedCells, grid, direction);
-
-		const EdgeMesh perimeterSegments =
-			createPerimeterSegments(
-				largestComponent.indices, clampedCells, grid);
 
 		
 		const std::filesystem::path debugOutputDir =
@@ -360,29 +322,18 @@ MoldCheckMetrics moldCheck(
 		}
 
 		const std::string base =
-			(debugOutputDir / "888_mold_check").string();
+			(debugOutputDir / "mold_check").string();
 		saveMesh(hitPointsMesh, base + "_hit_points.ply");
 		saveMesh(clampedonlyPointsMesh, base + "_clamped_only_points.ply");
-		saveMesh(clampednohitPointsMesh, base + "_clamped_nohit_points.ply");
 		saveMesh(clampedPointsMesh, base + "_all_clamped_points.ply");
-		saveMesh(moldClampedPointsMesh, base + "_mold_clamped_points.ply");
-		saveMesh(thirdHitPointsMesh, base + "_third_hit_points.ply");
-		saveMesh(lastHitPointsMesh, base + "_last_hit_points.ply");
-		saveMesh(oddHitPointsMesh, base + "_odd_hit_points.ply");
+		saveMesh(depthPointsMesh, base + "_depth_points.ply");
 		saveMesh(planeMesh, base + "_plane.ply");
-		saveMesh(missedPointsMesh, base + "_missed_points.ply");
-		saveMesh(ClampedPrismMesh, base + "_clamped_prisms.ply");
 		saveMesh(remainingMoldMesh, base + "_remaining_mold.ply");
-		saveMesh(segmentsRemainingMold, base + "_remaining_mold_segments.ply");
 		saveMesh(moldSurfaceMesh, base + "_mold_surface.ply");
 		saveMesh(largestComponentMesh, base + "_largest_component_points.ply");
-		saveMesh(perimeterSegments, base + "_largest_component_perimeter.ply");
 		
 		std::cout << "Clamped points: " << clampedPointsMesh.vertexCount() << "\n";
-		std::cout << "Mold clamped points: " << moldClampedPointsMesh.vertexCount() << "\n";
-		std::cout << "Third hit points: " << thirdHitPointsMesh.vertexCount() << "\n";
-		std::cout << "Odd hit cells: " << oddHitCells << "\n";
-		std::cout << "Odd hit points: " << oddHitPointsMesh.vertexCount() << "\n";
+		std::cout << "Depth points: " << depthPointsMesh.vertexCount() << "\n";
 		std::cout << "Mold surface median points: " << moldSurfaceMesh.vertexCount() << "\n";
 		std::cout << "Largest component cells: "
 				  << largestComponent.indices.size() << "\n";
@@ -409,20 +360,12 @@ MoldCheckMetrics moldCheck(
 		std::cout << "Saved debug meshes:\n"
 				<< " - " << base << "_hit_points.ply\n"
 				<< " - " << base << "_clamped_only_points.ply\n"
-				<< " - " << base << "_clamped_nohit_points.ply\n"
 				<< " - " << base << "_all_clamped_points.ply\n"
-				<< " - " << base << "_mold_clamped_points.ply\n"
-				<< " - " << base << "_third_hit_points.ply\n"
-				<< " - " << base << "_last_hit_points.ply\n"
-				<< " - " << base << "_odd_hit_points.ply\n"
+				<< " - " << base << "_depth_points.ply\n"
 				<< " - " << base << "_plane.ply\n"
-				<< " - " << base << "_missed_points.ply\n"
-				<< " - " << base << "_clamped_prisms.ply\n"
 				<< " - " << base << "_remaining_mold.ply\n"
-				<< " - " << base << "_remaining_mold_segments.ply\n"
 				<< " - " << base << "_mold_surface.ply\n"
-				<< " - " << base << "_largest_component_points.ply\n"
-				<< " - " << base << "_largest_component_perimeter.ply\n";
+				<< " - " << base << "_largest_component_points.ply\n";
 
 		std::cout << "=== moldCheck completed successfully ===\n";
 		std::cout.flush();
@@ -445,11 +388,11 @@ int main()
     PolyMesh m = loadMesh<PolyMesh>(MESHES_PATH "/bimba_enlarged.ply");
 
 
-    std::vector<double> gridCellSideLengths = {0.3, 0.3};
+    std::vector<double> gridCellSideLengths = {0.4, 0.4};
 
 	const double coneAngleDegrees = 5.0;
 
-	const double marginFactor = 0.1;
+	const double marginFactor = 0.05;
 
 	PolyMesh mold = squareMold(m, 0.05);
 	const std::filesystem::path externalResultsPath =
@@ -502,7 +445,7 @@ int main()
 		&bestRemainingMoldMesh);
 	const std::filesystem::path bestRemainingMoldPath =
 		externalResultsPath /
-		"best" / "mold" / "888_mold_check_remaining_mold.ply";
+		"best" / "mold" / "mold_check_remaining_mold.ply";
 	std::filesystem::create_directories(bestRemainingMoldPath.parent_path());
 	saveMesh(bestRemainingMoldMesh, bestRemainingMoldPath.string());
 
@@ -519,7 +462,7 @@ int main()
 		&worstRemainingMoldMesh);
 	const std::filesystem::path worstRemainingMoldPath =
 		externalResultsPath /
-		"worst" / "mold" / "888_mold_check_remaining_mold.ply";
+		"worst" / "mold" / "mold_check_remaining_mold.ply";
 	std::filesystem::create_directories(worstRemainingMoldPath.parent_path());
 	saveMesh(worstRemainingMoldMesh, worstRemainingMoldPath.string());
 
