@@ -1,0 +1,103 @@
+{
+    "version": 5,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 24,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "renderMSVC-release",
+            "displayName": "Render MSVC Release",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/renderMSVC-release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_COMPILER": "cl.exe",
+                "CMAKE_CXX_COMPILER": "cl.exe",
+                "CMAKE_CXX_FLAGS": "/EHsc",
+                "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
+                "CMAKE_C_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
+                "CMAKE_PREFIX_PATH": "C:/ProgramData/chocolatey/lib/embree.install/tools",
+                "VCLIB_BUILD_MODULE_RENDER": "ON",
+                "VCLIB_BUILD_MODULE_EXTERNAL": "ON",
+                "VCLIB_EXCLUDE_EXAMPLES_AND_TESTS_TARGETS": "ON",
+                "VCLIB_COMPILE_WARNINGS_AS_ERRORS": "OFF",
+                "VCLIB_CORE_BUILD_EXAMPLES": "OFF",
+                "VCLIB_CORE_BUILD_TESTS": "OFF",
+                "VCLIB_EXTERNAL_BUILD_EXAMPLES": "OFF",
+                "VCLIB_EXTERNAL_BUILD_TESTS": "OFF",
+                "CATCH_INSTALL_DOCS": "OFF",
+                "CATCH_INSTALL_EXTRAS": "OFF"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "renderVisualStudio-release",
+            "displayName": "Render Visual Studio Release",
+            "generator": "Visual Studio 17 2022",
+            "architecture": {
+                "value": "x64",
+                "strategy": "external"
+            },
+            "binaryDir": "${sourceDir}/build/renderVisualStudio-release",
+            "cacheVariables": {
+                "CMAKE_CXX_FLAGS": "/EHsc",
+                "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
+                "CMAKE_C_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
+                "CMAKE_PREFIX_PATH": "C:/ProgramData/chocolatey/lib/embree.install/tools",
+                "VCLIB_BUILD_MODULE_RENDER": "ON",
+                "VCLIB_BUILD_MODULE_EXTERNAL": "ON",
+                "VCLIB_EXCLUDE_EXAMPLES_AND_TESTS_TARGETS": "ON",
+                "VCLIB_COMPILE_WARNINGS_AS_ERRORS": "OFF",
+                "VCLIB_CORE_BUILD_EXAMPLES": "OFF",
+                "VCLIB_CORE_BUILD_TESTS": "OFF",
+                "VCLIB_EXTERNAL_BUILD_EXAMPLES": "OFF",
+                "VCLIB_EXTERNAL_BUILD_TESTS": "OFF",
+                "CATCH_INSTALL_DOCS": "OFF",
+                "CATCH_INSTALL_EXTRAS": "OFF"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "renderMSVC-release",
+            "configurePreset": "renderMSVC-release",
+            "targets": [
+                "mold-check"
+            ]
+        },
+        {
+            "name": "run-renderMSVC-release",
+            "configurePreset": "renderMSVC-release",
+            "targets": [
+                "run"
+            ]
+        },
+        {
+            "name": "renderVisualStudio-release",
+            "configurePreset": "renderVisualStudio-release",
+            "configuration": "Release",
+            "targets": [
+                "mold-check"
+            ]
+        },
+        {
+            "name": "run-renderVisualStudio-release",
+            "configurePreset": "renderVisualStudio-release",
+            "configuration": "Release",
+            "targets": [
+                "run"
+            ]
+        }
+    ]
+}

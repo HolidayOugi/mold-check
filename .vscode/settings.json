@@ -1,0 +1,10 @@
+{
+    "cmake.useCMakePresets": "always",
+    "cmake.configurePreset": "renderMSVC-release",
+    "cmake.buildPreset": "renderMSVC-release",
+    "cmake.buildTarget": "mold-check",
+    "cmake.launchTarget": "mold-check",
+    "cmake.buildBeforeRun": true,
+    "cmake.configureOnOpen": true,
+    "cmake.options.statusBarVisibility": "visible"
+}
