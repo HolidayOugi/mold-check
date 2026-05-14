@@ -1,0 +1,4 @@
+[submodule "vclib"]
+	path = vclib
+	url = https://github.com/HolidayOugi/vclib
+	branch = main
