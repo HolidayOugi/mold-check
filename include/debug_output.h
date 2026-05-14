@@ -66,6 +66,19 @@ static void validateClampedCells(
 	std::cout.flush();
 }
 
+static vcl::uint addFaceWithColor(
+	vcl::TriMesh& tm,
+	vcl::uint v0,
+	vcl::uint v1,
+	vcl::uint v2,
+	const vcl::Color& faceColor)
+{
+	tm.enablePerFaceColor();
+	const vcl::uint fid = tm.addFace(v0, v1, v2);
+	tm.face(fid).color() = faceColor;
+	return fid;
+}
+
 static vcl::TriMesh createMoldSurface(
 	const std::vector<CellData>& clampedCells,
 	const GridChoice& grid,
@@ -76,18 +89,35 @@ static vcl::TriMesh createMoldSurface(
 	TriMesh tm;
 	tm.enablePerFaceColor();
 
+	std::vector<std::vector<uint>> vertexGrid(grid.rows, std::vector<uint>(grid.cols, 0));
+
 	for (uint row = 0; row + 1 < grid.rows; row += 1) {
 		for (uint col = 0; col + 1 < grid.cols; col += 1) {
+			const uint point = row * grid.cols + col;
+
+			const Point3d p = clampedCells[point].hitPoints[0];
+
+			const uint v = tm.addVertex(p);
+
+			vertexGrid[row][col] = v;
+		}
+	}
+
+	for (uint row = 0; row + 2 < grid.rows; row += 1) {
+		for (uint col = 0; col + 2 < grid.cols; col += 1) {
+
 			const uint c00 = row * grid.cols + col;
 			const uint c10 = c00 + 1;
 			const uint c01 = c00 + grid.cols;
 			const uint c11 = c01 + 1;
+
 
 			const std::array<const CellData*, 4> cells = {
 				&clampedCells[c00],
 				&clampedCells[c10],
 				&clampedCells[c01],
 				&clampedCells[c11]};
+
 
 			const double averageDistance =
 				(cells[0]->distance +
@@ -105,39 +135,25 @@ static vcl::TriMesh createMoldSurface(
 
 			const Point3d medianPoint = foot + direction * averageDistance;
 
-			const Point3d p0 = cells[0]->hitPoints[0];
-			const Point3d p1 = cells[1]->hitPoints[0];
-			const Point3d p2 = cells[2]->hitPoints[0];
-			const Point3d p3 = cells[3]->hitPoints[0];
 
-			const uint v0 = tm.addVertex(p0);
-			const uint v1 = tm.addVertex(p1);
-			const uint v2 = tm.addVertex(p2);
-			const uint v3 = tm.addVertex(p3);
+			const uint v0 = vertexGrid[row][col];
+			const uint v1 = vertexGrid[row][col + 1];
+			const uint v2 = vertexGrid[row + 1][col];
+			const uint v3 = vertexGrid[row + 1][col + 1];
 			const uint vc = tm.addVertex(medianPoint);
 
-			tm.addFace(v0, vc, v1);
-			tm.addFace(v1, vc, v3);
-			tm.addFace(v3, vc, v2);
-			tm.addFace(v2, vc, v0);
+			
+			addFaceWithColor(tm, v0, vc, v1, Color::Gray);
+			addFaceWithColor(tm, v1, vc, v3, Color::Gray);
+			addFaceWithColor(tm, v3, vc, v2, Color::Gray);
+			addFaceWithColor(tm, v2, vc, v0, Color::Gray);
 		}
 	}
 
 	return tm;
 }
 
-static vcl::uint addFaceWithColor(
-	vcl::TriMesh& tm,
-	vcl::uint v0,
-	vcl::uint v1,
-	vcl::uint v2,
-	const vcl::Color& faceColor)
-{
-	tm.enablePerFaceColor();
-	const vcl::uint fid = tm.addFace(v0, v1, v2);
-	tm.face(fid).color() = faceColor;
-	return fid;
-}
+
 
 static void addQuadPrism(
 	vcl::TriMesh& tm,
@@ -364,213 +380,6 @@ static vcl::EdgeMesh createPerimeterSegments(
 	}
 
 	return em;
-}
-
-static void debugOutput(
-	const std::vector<CellData>& cells,
-	const std::vector<CellData>& clampedCells,
-	const std::vector<CellData>& moldClampedCells,
-	const ConnectedComponentData& largestComponent,
-	const GridChoice& grid,
-	const vcl::Point3d& planePoint,
-	const vcl::Point3d& u,
-	const vcl::Point3d& v,
-	const vcl::Point3d& direction,
-	float eps,
-	const std::string& debugResultsSubdir,
-	double totalAreaHit,
-	double clampedAreaHit,
-	double percentClamped,
-	double hiddenAreaHit,
-	double percentHidden,
-	double componentRatio,
-	double qualityScore)
-{
-	using namespace vcl;
-
-	PolyMesh hitPointsMesh;
-	hitPointsMesh.enablePerVertexColor();
-	for (uint i = 0; i < cells.size(); ++i) {
-		if (!cells[i].hasHit) continue;
-		addColoredPoint(hitPointsMesh, cells[i].hitPoints[0], Color::Yellow);
-	}
-	
-	PolyMesh clampedonlyPointsMesh;
-	clampedonlyPointsMesh.enablePerVertexColor();
-	for (uint i = 0; i < clampedCells.size(); ++i) {
-		if (!cells[i].hasHit) continue;
-		if (cells[i].distance == clampedCells[i].distance) continue;
-		addColoredPoint(clampedonlyPointsMesh, clampedCells[i].hitPoints[0], Color::Red);
-	}
-	
-	PolyMesh clampednohitPointsMesh;
-	clampednohitPointsMesh.enablePerVertexColor();
-	for (uint i = 0; i < clampedCells.size(); ++i) {
-		if (cells[i].hasHit) continue;
-		if (cells[i].distance == clampedCells[i].distance) continue;
-		addColoredPoint(clampednohitPointsMesh, clampedCells[i].hitPoints[0], Color::White);
-	}
-	
-	PolyMesh clampedPointsMesh;
-	clampedPointsMesh.enablePerVertexColor();
-	for (uint i = 0; i < clampedCells.size(); ++i) {
-		addColoredPoint(clampedPointsMesh, clampedCells[i].hitPoints[0], Color::Blue);
-	}
-
-	PolyMesh moldClampedPointsMesh;
-	moldClampedPointsMesh.enablePerVertexColor();
-	for (uint i = 0; i < moldClampedCells.size(); ++i) {
-		if (!moldClampedCells[i].hasHit) continue;
-		addColoredPoint(moldClampedPointsMesh, moldClampedCells[i].hitPoints[0], Color::Cyan);
-	}
-
-	PolyMesh thirdHitPointsMesh;
-	thirdHitPointsMesh.enablePerVertexColor();
-	for (uint i = 0; i < cells.size(); ++i) {
-		if (cells[i].hitPoints.size() <= 2) continue;
-		addColoredPoint(thirdHitPointsMesh, cells[i].hitPoints[2], Color::Magenta);
-	}
-
-	PolyMesh lastHitPointsMesh;
-	lastHitPointsMesh.enablePerVertexColor();
-	for (uint i = 0; i < cells.size(); ++i) {
-		if (!cells[i].hasHit) continue;
-		addColoredPoint(lastHitPointsMesh, cells[i].hitPoints.back(), Color::Green);
-	}
-
-	PolyMesh oddHitPointsMesh;
-	oddHitPointsMesh.enablePerVertexColor();
-	uint oddHitCells = 0;
-	for (uint i = 0; i < cells.size(); ++i) {
-		if (!cells[i].hasHit) continue;
-		if (cells[i].hitPoints.size() % 2 == 0) continue;
-		++oddHitCells;
-		for (const Point3d& hitPoint : cells[i].hitPoints) {
-			addColoredPoint(oddHitPointsMesh, hitPoint, Color::LightYellow);
-		}
-	}
-	
-	PolyMesh missedPointsMesh;
-	missedPointsMesh.enablePerVertexColor();
-	for (uint i = 0; i < clampedCells.size(); ++i) {
-		if (clampedCells[i].hasHit) continue;
-		addColoredPoint(missedPointsMesh, clampedCells[i].hitPoints[0], Color::Green);
-	}
-
-	PolyMesh largestComponentMesh;
-	largestComponentMesh.enablePerVertexColor();
-	for (uint i : largestComponent.indices) {
-		addColoredPoint(largestComponentMesh, clampedCells[i].hitPoints[0], Color::Cyan);
-	}
-
-	const TriMesh planeMesh =
-		makeDebugPlaneMesh(grid, planePoint, u, v);
-
-	TriMesh ClampedPrismMesh;
-	for (uint i = 0; i < clampedCells.size(); ++i) {
-		if (!clampedCells[i].hasHit) continue;
-		addQuadPrism(ClampedPrismMesh, clampedCells[i].cellCorners, -eps, clampedCells[i].distance, direction, vcl::Color::White);
-	}
-	
-	TriMesh remainingMoldMesh;
-	EdgeMesh segmentsRemainingMold;
-	for (uint i = 0; i < clampedCells.size(); ++i) {
-		if (!cells[i].hasHit) continue;
-		if (cells[i].distance == clampedCells[i].distance) continue;
-		addQuadPrism(remainingMoldMesh, clampedCells[i].cellCorners, clampedCells[i].distance, cells[i].distance, direction, vcl::Color::Red);
-		addSegment(
-			segmentsRemainingMold,
-			clampedCells[i].hitPoints[0],
-			cells[i].hitPoints[0]);
-	}
-
-	const TriMesh moldSurfaceMesh = createMoldSurface(clampedCells, grid, direction);
-
-	const EdgeMesh perimeterSegments =
-		createPerimeterSegments(
-			largestComponent.indices, clampedCells, grid);
-
-	
-	const std::filesystem::path debugOutputDir =
-		std::filesystem::path(RESULTS_PATH) /
-		debugResultsSubdir;
-
-	std::filesystem::create_directories(debugOutputDir);
-
-	for (const auto& entry :
-		 std::filesystem::directory_iterator(debugOutputDir)) {
-		if (entry.is_regular_file() && entry.path().extension() == ".ply") {
-			std::filesystem::remove(entry.path());
-		}
-	}
-
-	const std::string base =
-		(debugOutputDir / "888_mold_check").string();
-	saveMesh(hitPointsMesh, base + "_hit_points.ply");
-	saveMesh(clampedonlyPointsMesh, base + "_clamped_only_points.ply");
-	saveMesh(clampednohitPointsMesh, base + "_clamped_nohit_points.ply");
-	saveMesh(clampedPointsMesh, base + "_all_clamped_points.ply");
-	saveMesh(moldClampedPointsMesh, base + "_mold_clamped_points.ply");
-	saveMesh(thirdHitPointsMesh, base + "_third_hit_points.ply");
-	saveMesh(lastHitPointsMesh, base + "_last_hit_points.ply");
-	saveMesh(oddHitPointsMesh, base + "_odd_hit_points.ply");
-	saveMesh(planeMesh, base + "_plane.ply");
-	saveMesh(missedPointsMesh, base + "_missed_points.ply");
-	saveMesh(ClampedPrismMesh, base + "_clamped_prisms.ply");
-	saveMesh(remainingMoldMesh, base + "_remaining_mold.ply");
-	saveMesh(segmentsRemainingMold, base + "_remaining_mold_segments.ply");
-	saveMesh(moldSurfaceMesh, base + "_mold_surface.ply");
-	saveMesh(largestComponentMesh, base + "_largest_component_points.ply");
-	saveMesh(perimeterSegments, base + "_largest_component_perimeter.ply");
-	
-	std::cout << "Clamped points: " << clampedPointsMesh.vertexCount() << "\n";
-	std::cout << "Mold clamped points: " << moldClampedPointsMesh.vertexCount() << "\n";
-	std::cout << "Third hit points: " << thirdHitPointsMesh.vertexCount() << "\n";
-	std::cout << "Odd hit cells: " << oddHitCells << "\n";
-	std::cout << "Odd hit points: " << oddHitPointsMesh.vertexCount() << "\n";
-	std::cout << "Mold surface median points: " << moldSurfaceMesh.vertexCount() << "\n";
-	std::cout << "Largest component cells: "
-			  << largestComponent.indices.size() << "\n";
-	std::cout << "Largest component area: "
-			  << largestComponent.area << "\n";
-	std::cout << "Largest component perimeter: "
-			  << largestComponent.perimeter << "\n";
-	std::cout << "Largest component compactness: "
-			  << largestComponent.compactness << "\n";
-	std::cout << "TotalAreaHit: "
-			  << totalAreaHit << "\n";
-	std::cout << "ClampedAreaHit: "
-			  << clampedAreaHit << "\n";
-	std::cout << "percentClamped: "
-			  << percentClamped << "\n";
-	std::cout << "hiddenAreaHit: "
-			  << hiddenAreaHit << "\n";
-	std::cout << "percentHidden: "
-			  << percentHidden << "\n";
-	std::cout << "componentRatio: "
-			  << componentRatio << "\n";
-	std::cout << "qualityScore: "
-			  << qualityScore << "\n";
-	std::cout << "Saved debug meshes:\n"
-			<< " - " << base << "_hit_points.ply\n"
-			<< " - " << base << "_clamped_only_points.ply\n"
-			<< " - " << base << "_clamped_nohit_points.ply\n"
-			<< " - " << base << "_all_clamped_points.ply\n"
-			<< " - " << base << "_mold_clamped_points.ply\n"
-			<< " - " << base << "_third_hit_points.ply\n"
-			<< " - " << base << "_last_hit_points.ply\n"
-			<< " - " << base << "_odd_hit_points.ply\n"
-			<< " - " << base << "_plane.ply\n"
-			<< " - " << base << "_missed_points.ply\n"
-			<< " - " << base << "_clamped_prisms.ply\n"
-			<< " - " << base << "_remaining_mold.ply\n"
-			<< " - " << base << "_remaining_mold_segments.ply\n"
-			<< " - " << base << "_mold_surface.ply\n"
-			<< " - " << base << "_largest_component_points.ply\n"
-			<< " - " << base << "_largest_component_perimeter.ply\n";
-
-	std::cout << "=== moldCheck completed successfully ===\n";
-	std::cout.flush();
 }
 
 #endif
