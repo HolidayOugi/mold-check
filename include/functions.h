@@ -369,9 +369,11 @@ static CellData computeClampedCell(
 static std::vector<CellData> makeDepthCells(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& clampedCells,
-	const vcl::Point3d& direction)
+	const vcl::Point3d& direction,
+	const GridChoice& grid)
 {
-	if (cells.size() != clampedCells.size()) {
+	if (cells.size() != clampedCells.size() ||
+		cells.size() != grid.rows * grid.cols) {
 		return {};
 	}
 
@@ -385,8 +387,28 @@ static std::vector<CellData> makeDepthCells(
 			depthCells[i].hitPoints = {
 				depthCells[i].cellCenter +
 				direction * depthCells[i].distance};
-			distanceSum += depthCells[i].distance;
-			++hitCount;
+
+			const vcl::uint row = i / grid.cols;
+			const vcl::uint col = i % grid.cols;
+			bool hasMissingNeighbor = false;
+
+			if (col > 0 && !cells[i - 1].hasHit) {
+				hasMissingNeighbor = true;
+			}
+			if (col + 1 < grid.cols && !cells[i + 1].hasHit) {
+				hasMissingNeighbor = true;
+			}
+			if (row > 0 && !cells[i - grid.cols].hasHit) {
+				hasMissingNeighbor = true;
+			}
+			if (row + 1 < grid.rows && !cells[i + grid.cols].hasHit) {
+				hasMissingNeighbor = true;
+			}
+
+			if (hasMissingNeighbor) {
+				distanceSum += depthCells[i].distance;
+				++hitCount;
+			}
 		}
 		else {
 			depthCells[i].hasHit = false;
@@ -437,7 +459,13 @@ static std::vector<CellData> smoothMissingDepthCells(
 		std::vector<CellData> nextDepthCells = currentDepthCells;
 
 		parallelFor(allCells, [&](uint idx) {
-			if (currentDepthCells[idx].hasHit) {
+			const bool isMissingDepthCell = !currentDepthCells[idx].hasHit;
+			const bool isClampedCloserCell =
+				cells[idx].hasHit &&
+				clampedCells[idx].hasHit &&
+				clampedCells[idx].distance < cells[idx].distance;
+
+			if (!isMissingDepthCell && !isClampedCloserCell) {
 				return;
 			}
 

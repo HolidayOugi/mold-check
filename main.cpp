@@ -197,7 +197,7 @@ MoldCheckMetrics moldCheck(
 
 		depthCells =
 			smoothMissingDepthCells(
-				makeDepthCells(cells, clampedCells, direction),
+				makeDepthCells(cells, clampedCells, direction, grid),
 				cells,
 				clampedCells,
 				direction,
@@ -285,10 +285,26 @@ MoldCheckMetrics moldCheck(
 		for (uint i = 0; i < depthCells.size(); ++i) {
 			const Point3d depthPoint =
 				depthCells[i].cellCenter + direction * depthCells[i].distance;
+			Color depthColor = Color::White;
+			if (cells[i].hasHit &&
+				clampedCells[i].hasHit &&
+				clampedCells[i].distance < cells[i].distance) {
+				depthColor = Color::Green;
+			}
+			else if (cells[i].hasHit &&
+				std::abs(depthCells[i].distance - cells[i].distance) <= EPS) {
+				depthColor = Color::Red;
+			}
+			else if (clampedCells[i].hasHit &&
+					 std::abs(
+						 depthCells[i].distance -
+						 clampedCells[i].distance) <= EPS) {
+				depthColor = Color::Green;
+			}
 			addColoredPoint(
 				depthPointsMesh,
 				depthPoint,
-				depthCells[i].hasHit && cells[i].distance == clampedCells[i].distance ? Color::Cyan : Color::White);
+				depthColor);
 		}
 
 		PolyMesh largestComponentMesh;
@@ -391,7 +407,7 @@ int main()
     PolyMesh m = loadMesh<PolyMesh>(MESHES_PATH "/bimba_enlarged.ply");
 
 
-    std::vector<double> gridCellSideLengths = {0.3, 0.3};
+    std::vector<double> gridCellSideLengths = {0.4, 0.4};
 
 	const double coneAngleDegrees = 5.0;
 
