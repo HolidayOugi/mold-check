@@ -33,7 +33,6 @@
 #include <filesystem>
 #include <limits>
 #include <numeric>
-#include <unordered_set>
 #include <vector>
 
 #include "include/struct.h"
@@ -44,21 +43,24 @@
 struct MoldCheckMetrics
 {
 	double score = -std::numeric_limits<double>::infinity();
-	double componentRatio = 0.0;
-	vcl::uint largestComponentSize = 0;
+	double hitRatio = 0.0;
+	double compactness = 0.0;
+	vcl::uint hitCount = 0;
 	double percentClamped = 0.0;
 	double percentHidden = 0.0;
 };
 
 static double moldQualityScore(
-	double componentRatio,
+	double hitRatio,
+	double compactness,
 	double percentClamped,
 	double percentHidden)
 {
 	return
-		0.50 * componentRatio +
-		0.30 * (1 - (percentClamped / 100.0)) +
-		0.20 * (1 - (percentHidden / 100.0));
+		0.30 * hitRatio +
+		0.30 * compactness +
+		0.20 * (1 - (percentHidden / 100.0)) +
+		0.20 * (1 - (percentClamped / 100.0));
 }
 
 MoldCheckMetrics moldCheck(
@@ -68,9 +70,7 @@ MoldCheckMetrics moldCheck(
 	vcl::Point3d 			   direction,
 	const double 			   coneAngleDegrees,
 	const double 			   marginFactor,
-	const std::string&         debugResultsSubdir = "",
-	const vcl::PolyMesh*       mold = nullptr,
-	vcl::TriMesh*              outRemainingMoldMesh = nullptr)
+	const std::string&         debugResultsSubdir = "")
 {
 	using namespace vcl;
 
@@ -132,12 +132,10 @@ MoldCheckMetrics moldCheck(
 		cells[idx] = shootRayOnCell(cell, m, scene, planePoint, direction, MAX_DISTANCE, RAY_EPS);
 	});
 
-	const double REDUCE_POINTS_DISTANCE_THRESHOLD =
-		0.03 * MAX_DISTANCE;
+	const double REDUCE_POINTS_DISTANCE_THRESHOLD =	0.03 * MAX_DISTANCE;
 	cells = reducePoints(
 		cells,
 		grid,
-		3,
 		REDUCE_POINTS_DISTANCE_THRESHOLD);
 
     std::vector<CellData> clampedCells = cells;
@@ -169,12 +167,14 @@ MoldCheckMetrics moldCheck(
 	double totalAreaHit = 0.0;
 	double clampedAreaHit = 0.0;
 	double hiddenAreaHit = 0.0;
+	uint reducedHitCount = 0;
 
 	for (uint i = 0; i < cells.size(); ++i) {
 		if (!cells[i].hasHit) {
 			continue;
 		}
 
+		++reducedHitCount;
 		totalAreaHit += cellArea;
 
 		if (clampedCells[i].distance != cells[i].distance) {
@@ -191,17 +191,22 @@ MoldCheckMetrics moldCheck(
 	const double percentHidden =
 		(totalAreaHit > 0.0) ? (hiddenAreaHit / totalAreaHit) * 100.0 : 0.0;
 
-	ConnectedComponentData largestComponent =
-		largestConnectedComponent(
-			cells, clampedCells, grid, EPS);
+	const HitCellShapeData hitShape = hitCellShape(cells, grid);
 
-	const double componentRatio =
-		(totalAreaHit > 0.0) ? (largestComponent.area / totalAreaHit) : 0.0;
+	const double hitRatio =
+		(cells.size() > 0) ?
+			static_cast<double>(reducedHitCount) / cells.size() :
+			0.0;
 
 	const MoldCheckMetrics metrics{
-		moldQualityScore(componentRatio, percentClamped, percentHidden),
-		componentRatio,
-		static_cast<uint>(largestComponent.indices.size()),
+		moldQualityScore(
+			hitRatio,
+			hitShape.compactness,
+			percentClamped,
+			percentHidden),
+		hitRatio,
+		hitShape.compactness,
+		reducedHitCount,
 		percentClamped,
 		percentHidden};
 
@@ -218,53 +223,21 @@ MoldCheckMetrics moldCheck(
 				clampedCells,
 				direction,
 				grid,
-				5,
+				7,
 				5000);
 
 	}
 
-	std::vector<CellData> moldClampedCells = clampedCells;
-
-	if (mold != nullptr) {
-		embree::Scene moldScene(*mold);
-		for (uint i = 0; i < moldClampedCells.size(); ++i) {
-			if (!moldClampedCells[i].hasHit) continue;
-
-			const Point3d rayOrigin =
-				moldClampedCells[i].hitPoints[0] - direction * RAY_EPS;
-
-			const auto rayHits =
-				moldScene.facesIntersectedByRay(
-					rayOrigin,
-					direction,
-					RAY_EPS);
-
-			if (rayHits.empty()) {
-				moldClampedCells[i].hasHit = false;
-				continue;
-			};
-
-			const auto [faceId, baryCoords, triId, hitT] =
-				rayHits.back();
-
-			moldClampedCells[i].hitPoints = {
-				computeHitPoint(
-					*mold,
-					faceId,
-					triId,
-					baryCoords,
-					moldClampedCells[i].hitPoints[0])};
-			moldClampedCells[i].distance = hitT;
-		}
-	}
-
-	if (outRemainingMoldMesh != nullptr) {
-		*outRemainingMoldMesh =
-			createRemainingMold(
-				cells,
-				clampedCells,
-				moldClampedCells,
-				direction);
+	if (debug) {
+		std::cout << "Depth smoothing complete.\n";
+		std::cout << "Fixing depth cell cone violations...\n";
+		std::cout.flush();
+		depthCells =
+			fixDepthCellConeViolations(
+				depthCells,
+				direction,
+				CONE_COS_THRESHOLD,
+				EPS);
 	}
 
 	
@@ -330,12 +303,6 @@ MoldCheckMetrics moldCheck(
 				depthColor);
 		}
 
-		PolyMesh largestComponentMesh;
-		largestComponentMesh.enablePerVertexColor();
-		for (uint i : largestComponent.indices) {
-			addColoredPoint(largestComponentMesh, clampedCells[i].hitPoints[0], Color::Cyan);
-		}
-
 		const TriMesh planeMesh =
 			makeDebugPlaneMesh(grid, planePoint, u, v);
 
@@ -372,20 +339,17 @@ MoldCheckMetrics moldCheck(
 		saveMesh(planeMesh, base + "_plane.ply");
 		saveMesh(remainingMoldMesh, base + "_remaining_mold.ply");
 		saveMesh(moldSurfaceMesh, base + "_mold_surface.ply");
-		saveMesh(largestComponentMesh, base + "_largest_component_points.ply");
 		saveMesh(violatingPointsMesh, base + "_violating_points.ply");
 		
 		std::cout << "Clamped points: " << clampedPointsMesh.vertexCount() << "\n";
 		std::cout << "Depth points: " << depthPointsMesh.vertexCount() << "\n";
 		std::cout << "Mold surface median points: " << moldSurfaceMesh.vertexCount() << "\n";
-		std::cout << "Largest component cells: "
-				  << largestComponent.indices.size() << "\n";
-		std::cout << "Largest component area: "
-				  << largestComponent.area << "\n";
-		std::cout << "Largest component perimeter: "
-				  << largestComponent.perimeter << "\n";
-		std::cout << "Largest component compactness: "
-				  << largestComponent.compactness << "\n";
+		std::cout << "Hit cells area: "
+				  << hitShape.area << "\n";
+		std::cout << "Hit cells perimeter: "
+				  << hitShape.perimeter << "\n";
+		std::cout << "Hit cells compactness: "
+				  << hitShape.compactness << "\n";
 		std::cout << "TotalAreaHit: "
 				  << totalAreaHit << "\n";
 		std::cout << "ClampedAreaHit: "
@@ -396,8 +360,10 @@ MoldCheckMetrics moldCheck(
 				  << hiddenAreaHit << "\n";
 		std::cout << "percentHidden: "
 				  << percentHidden << "\n";
-		std::cout << "componentRatio: "
-				  << componentRatio << "\n";
+		std::cout << "hitRatio: "
+				  << hitRatio << "\n";
+		std::cout << "hitCount: "
+				  << reducedHitCount << "\n";
 		std::cout << "qualityScore: "
 				  << metrics.score << "\n";
 		std::cout << "Saved debug meshes:\n"
@@ -409,7 +375,7 @@ MoldCheckMetrics moldCheck(
 				<< " - " << base << "_plane.ply\n"
 				<< " - " << base << "_remaining_mold.ply\n"
 				<< " - " << base << "_mold_surface.ply\n"
-				<< " - " << base << "_largest_component_points.ply\n";
+				<< " - " << base << "_violating_points.ply\n";
 
 		std::cout << "=== moldCheck completed successfully ===\n";
 		std::cout.flush();
@@ -424,7 +390,7 @@ int main()
 
 	const auto startTime = std::chrono::steady_clock::now();
 
-	const uint NUM_PLANES = 50;
+	const uint NUM_PLANES = 100;
 
 	std::vector<Point3d> fibNormals = sphericalFibonacciPointSet<Point3d>(NUM_PLANES);
 
@@ -438,16 +404,9 @@ int main()
 
 	const double marginFactor = 0.05;
 
-	PolyMesh mold = squareMold(m, 0.05);
 	const std::filesystem::path externalResultsPath =
 		RESULTS_PATH;
 	std::filesystem::create_directories(externalResultsPath);
-	saveMesh(
-		mold,
-		(externalResultsPath / "mold.ply").string());
-	
-	double moldVolume = squareMoldVolume(m, marginFactor);
-	std::cout << "Mold volume: " << moldVolume << "\n";
 
 	MoldCheckMetrics result;
 	MoldCheckMetrics bestResult;
@@ -460,8 +419,9 @@ int main()
 		std::cout << "Processing direction: " << direction << "\n";
 		result = moldCheck(m, gridCellSideLengths, false, direction, coneAngleDegrees, marginFactor);
 		std::cout << "Score: " << result.score
-					  << " (component ratio: " << result.componentRatio
-					  << ", largest component cells: " << result.largestComponentSize
+					  << " (hit ratio: " << result.hitRatio
+					  << ", compactness: " << result.compactness
+					  << ", hits: " << result.hitCount
 					  << ", clamped: " << result.percentClamped << "%"
 					  << ", hidden: " << result.percentHidden << "%)\n";
 		if (result.score > bestResult.score) {
@@ -476,7 +436,6 @@ int main()
 		}
 	}
 
-	TriMesh bestRemainingMoldMesh;
 	result = moldCheck(
 		m,
 		gridCellSideLengths,
@@ -484,16 +443,8 @@ int main()
 		fibNormals[bestDirectionIndex],
 		coneAngleDegrees,
 		marginFactor,
-		"best",
-		&mold,
-		&bestRemainingMoldMesh);
-	const std::filesystem::path bestRemainingMoldPath =
-		externalResultsPath /
-		"best" / "mold" / "mold_check_remaining_mold.ply";
-	std::filesystem::create_directories(bestRemainingMoldPath.parent_path());
-	saveMesh(bestRemainingMoldMesh, bestRemainingMoldPath.string());
+		"best");
 
-	TriMesh worstRemainingMoldMesh;
 	result = moldCheck(
 		m,
 		gridCellSideLengths,
@@ -501,14 +452,7 @@ int main()
 		fibNormals[worstDirectionIndex],
 		coneAngleDegrees,
 		marginFactor,
-		"worst",
-		&mold,
-		&worstRemainingMoldMesh);
-	const std::filesystem::path worstRemainingMoldPath =
-		externalResultsPath /
-		"worst" / "mold" / "mold_check_remaining_mold.ply";
-	std::filesystem::create_directories(worstRemainingMoldPath.parent_path());
-	saveMesh(worstRemainingMoldMesh, worstRemainingMoldPath.string());
+		"worst");
 
     const auto endTime = std::chrono::steady_clock::now();
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);

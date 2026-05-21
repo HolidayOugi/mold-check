@@ -29,9 +29,8 @@ struct CellData
 	bool hasHit = false;
 };
 
-struct ConnectedComponentData
+struct HitCellShapeData
 {
-	std::vector<vcl::uint> indices;
 	double area = 0.0;
 	double perimeter = 0.0;
 	double compactness = 0.0;

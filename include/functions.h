@@ -12,100 +12,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include <vclib/algorithms/mesh/stat/geometry.h>
 #include <vclib/algorithms/mesh/update/bounding_box.h>
 #include <vclib/embree/scene.h>
 #include <vclib/meshes.h>
-
-static std::tuple<vcl::Point3d, vcl::Point3d> expandedBoundingBox(
-	const vcl::PolyMesh& m,
-	double marginFactor)
-{
-	using namespace vcl;
-
-	if (m.vertexCount() == 0) {
-		return {Point3d(), Point3d()};
-	}
-
-	Point3d min = m.vertices().begin()->position();
-	Point3d max = min;
-
-	for (const auto& v : m.vertices()) {
-		const Point3d& p = v.position();
-		for (uint i = 0; i < 3; ++i) {
-			min(i) = std::min(min(i), p(i));
-			max(i) = std::max(max(i), p(i));
-		}
-	}
-
-	const double margin = marginFactor * (max - min).norm();
-	min -= Point3d(margin, margin, margin);
-	max += Point3d(margin, margin, margin);
-
-	return {min, max};
-}
-
-static void addBoxTriangles(
-	vcl::PolyMesh& mold,
-	const vcl::Point3d& min,
-	const vcl::Point3d& max)
-{
-	using namespace vcl;
-
-	const uint v0 = mold.addVertex(Point3d(min.x(), min.y(), min.z()));
-	const uint v1 = mold.addVertex(Point3d(max.x(), min.y(), min.z()));
-	const uint v2 = mold.addVertex(Point3d(min.x(), max.y(), min.z()));
-	const uint v3 = mold.addVertex(Point3d(max.x(), max.y(), min.z()));
-	const uint v4 = mold.addVertex(Point3d(min.x(), min.y(), max.z()));
-	const uint v5 = mold.addVertex(Point3d(max.x(), min.y(), max.z()));
-	const uint v6 = mold.addVertex(Point3d(min.x(), max.y(), max.z()));
-	const uint v7 = mold.addVertex(Point3d(max.x(), max.y(), max.z()));
-
-	mold.addFace(v0, v2, v1);
-	mold.addFace(v3, v1, v2);
-	mold.addFace(v0, v4, v2);
-	mold.addFace(v6, v2, v4);
-	mold.addFace(v0, v1, v4);
-	mold.addFace(v5, v4, v1);
-	mold.addFace(v7, v6, v5);
-	mold.addFace(v4, v5, v6);
-	mold.addFace(v7, v3, v6);
-	mold.addFace(v2, v6, v3);
-	mold.addFace(v7, v5, v3);
-	mold.addFace(v1, v3, v5);
-}
-
-static vcl::PolyMesh squareMold(const vcl::PolyMesh& m, double marginFactor)
-{
-	using namespace vcl;
-
-	if (m.vertexCount() == 0) {
-		return {};
-	}
-
-	const auto [min, max] = expandedBoundingBox(m, marginFactor);
-
-	PolyMesh mold;
-	addBoxTriangles(mold, min, max);
-
-	updateBoundingBox(mold);
-	return mold;
-}
-
-static double squareMoldVolume(const vcl::PolyMesh& m, double marginFactor)
-{
-	using namespace vcl;
-
-	if (m.vertexCount() == 0) {
-		return 0.0;
-	}
-
-	const auto [min, max] = expandedBoundingBox(m, marginFactor);
-	const Point3d boxSize = max - min;
-	const double boxVolume = boxSize.x() * boxSize.y() * boxSize.z();
-
-	return boxVolume - std::abs(volume(m));
-}
 
 static std::tuple<vcl::Point3d, vcl::Point3d> makePlane(
 	const vcl::PolyMesh& m,
@@ -437,7 +346,6 @@ static std::vector<CellData> makeDepthCells(
 static std::vector<CellData> reducePoints(
 	std::vector<CellData> cells,
 	const GridChoice& grid,
-	vcl::uint squareSize = 3,
 	double distanceThreshold = std::numeric_limits<double>::infinity())
 {
 	using namespace vcl;
@@ -446,17 +354,16 @@ static std::vector<CellData> reducePoints(
 		return cells;
 	}
 
-	erodeHitMaskOnce(cells, grid, squareSize);
-	erodeHitMaskOnce(cells, grid, squareSize);
-	dilateHitMaskOnce(cells, grid, squareSize);
-	dilateHitMaskOnce(cells, grid, squareSize);
+	erodeHitMaskOnce(cells, grid);
+	erodeHitMaskOnce(cells, grid);
+	dilateHitMaskOnce(cells, grid);
+	dilateHitMaskOnce(cells, grid);
 
 	cells = removeDistanceJumpPoints(
 		cells,
 		grid,
-		squareSize,
 		distanceThreshold);
-	cells = keepLargestHitComponent(cells, grid, squareSize);
+	cells = keepLargestHitComponent(cells, grid);
 
 	return cells;
 }
@@ -503,7 +410,12 @@ static std::vector<CellData> smoothMissingDepthCells(
 
 			double distanceSum = 0.0;
 			uint distanceCount = 0;
+			double minAllowedDistance = -std::numeric_limits<double>::infinity();
 			double maxAllowedDistance = std::numeric_limits<double>::infinity();
+
+			if (isMissingDepthCell) {
+				maxAllowedDistance = cells[idx].distance;
+			}
 
 			for (int rowOffset = -radius; rowOffset <= radius; ++rowOffset) {
 				for (int colOffset = -radius; colOffset <= radius; ++colOffset) {
@@ -543,6 +455,10 @@ static std::vector<CellData> smoothMissingDepthCells(
 
 			double newDistance = distanceSum / distanceCount;
 
+			if (minAllowedDistance > -std::numeric_limits<double>::infinity()) {
+				newDistance = std::max(newDistance, minAllowedDistance);
+			}
+
 			if (maxAllowedDistance < std::numeric_limits<double>::infinity()) {
 				newDistance = std::min(newDistance, maxAllowedDistance);
 			}
@@ -559,81 +475,66 @@ static std::vector<CellData> smoothMissingDepthCells(
 	return currentDepthCells;
 }
 
-static ConnectedComponentData largestConnectedComponent(
-	const std::vector<CellData>& cells,
-	const std::vector<CellData>& clampedCells,
-	const GridChoice& grid,
+static std::vector<CellData> fixDepthCellConeViolations(
+	std::vector<CellData> depthCells,
+	const vcl::Point3d& direction,
+	double coneCosThreshold,
 	float eps)
 {
 	using namespace vcl;
 
-	ConnectedComponentData result;
+	const std::vector<CellData> originalDepthCells = depthCells;
+	std::vector<uint> allCells(depthCells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
 
-	if (cells.size() != clampedCells.size() ||
-		cells.size() != grid.rows * grid.cols) {
-		return result;
-	}
-
-	std::vector<bool> visited(cells.size(), false);
-
-	//BFS
-
-	for (uint start = 0; start < cells.size(); ++start) {
-		if (visited[start] ||
-			!isSameDistanceCell(cells, clampedCells, start, eps)) {
-			continue;
+	parallelFor(allCells, [&](uint i) {
+		if (originalDepthCells[i].hitPoints.empty()) {
+			return;
 		}
 
-		std::vector<uint> component;
-		std::vector<uint> stack;
+		const Point3d original = originalDepthCells[i].hitPoints[0];
 
-		visited[start] = true;
-		stack.push_back(start);
+		double requiredT = 0.0;
+		bool hasViolation = false;
 
-		while (!stack.empty()) {
-			const uint idx = stack.back();
-			stack.pop_back();
-			component.push_back(idx);
+		for (uint j = 0; j < originalDepthCells.size(); ++j) {
+			if (i == j || originalDepthCells[j].hitPoints.empty()) {
+				continue;
+			}
 
-			const uint row = idx / grid.cols;
-			const uint col = idx % grid.cols;
+			if (!isWithinPlaneAngle(
+					original,
+					originalDepthCells[j].hitPoints[0],
+					direction,
+					coneCosThreshold,
+					eps)) {
+				continue;
+			}
 
-			if (col > 0) {
-				const uint neighbor = idx - 1;
-				pushNeighbor(
-					stack, visited, cells, clampedCells, neighbor, eps);
-			}
-			if (col + 1 < grid.cols) {
-				const uint neighbor = idx + 1;
-				pushNeighbor(
-					stack, visited, cells, clampedCells, neighbor, eps);
-			}
-			if (row > 0) {
-				const uint neighbor = idx - grid.cols;
-				pushNeighbor(
-					stack, visited, cells, clampedCells, neighbor, eps);
-			}
-			if (row + 1 < grid.rows) {
-				const uint neighbor = idx + grid.cols;
-				pushNeighbor(
-					stack, visited, cells, clampedCells, neighbor, eps);
-			}
+			hasViolation = true;
+
+			const double t = coneBoundaryStep(
+				original,
+				originalDepthCells[j].hitPoints[0],
+				direction,
+				coneCosThreshold,
+				eps);
+
+			requiredT = std::max(requiredT, t);
 		}
 
-		if (component.size() > result.indices.size()) {
-			result.indices = std::move(component);
+		if (!hasViolation) {
+			return;
 		}
-	}
 
-	for (uint idx : result.indices) {
-		result.area += grid.sideU * grid.sideV;
-	}
+		const Point3d fixedPoint = original - direction * requiredT;
 
-	result.perimeter = componentGridPerimeter(result.indices, grid);
-	result.compactness =
-		(result.perimeter > 0.0) ? (result.area / result.perimeter) : 0.0;
+		depthCells[i].hitPoints[0] = fixedPoint;
+		depthCells[i].distance =
+			(fixedPoint - depthCells[i].cellCenter).dot(direction);
+	});
 
-	return result;
+	return depthCells;
 }
 
 #endif

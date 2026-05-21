@@ -3,13 +3,11 @@
 
 #include "struct.h"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <filesystem>
 #include <iostream>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include <vclib/io.h>
@@ -106,8 +104,8 @@ static vcl::TriMesh createMoldSurface(
 
 	std::vector<std::vector<uint>> vertexGrid(grid.rows, std::vector<uint>(grid.cols, 0));
 
-	for (uint row = 0; row + 1 < grid.rows; row += 1) {
-		for (uint col = 0; col + 1 < grid.cols; col += 1) {
+	for (uint row = 0; row < grid.rows; row += 1) {
+		for (uint col = 0; col < grid.cols; col += 1) {
 			const uint point = row * grid.cols + col;
 
 			const Point3d p = clampedCells[point].hitPoints[0];
@@ -118,8 +116,8 @@ static vcl::TriMesh createMoldSurface(
 		}
 	}
 
-	for (uint row = 0; row + 2 < grid.rows; row += 1) {
-		for (uint col = 0; col + 2 < grid.cols; col += 1) {
+	for (uint row = 0; row + 1 < grid.rows; row += 1) {
+		for (uint col = 0; col + 1 < grid.cols; col += 1) {
 
 			const uint c00 = row * grid.cols + col;
 			const uint c10 = c00 + 1;
@@ -217,110 +215,6 @@ static void addQuadPrism(
 }
 
 
-static double pointOffsetFromCellPlane(
-	const CellData& cell,
-	const vcl::Point3d& point,
-	const vcl::Point3d& direction)
-{
-	return (point - cell.cellCenter).dot(direction);
-}
-
-static vcl::TriMesh createRemainingMold(
-	const std::vector<CellData>& cells,
-	const std::vector<CellData>& clampedCells,
-	const std::vector<CellData>& moldClampedCells,
-	const vcl::Point3d& direction)
-{
-	using namespace vcl;
-
-	TriMesh tm;
-
-	if (moldClampedCells.size() != clampedCells.size()) {
-		return tm;
-	}
-
-	for (uint i = 0; i < clampedCells.size(); ++i) {
-		if (!clampedCells[i].hasHit || !moldClampedCells[i].hasHit) {
-			continue;
-		}
-
-		const double moldDistance =
-			pointOffsetFromCellPlane(
-				clampedCells[i],
-				moldClampedCells[i].hitPoints[0],
-				direction);
-
-		if (cells[i].hasHit) {
-			for (std::size_t hitIndex = 2;
-				 hitIndex + 1 < cells[i].hitPoints.size() - 1;
-				 hitIndex += 2) {
-				const double startHitDistance =
-					pointOffsetFromCellPlane(
-						clampedCells[i],
-						cells[i].hitPoints[hitIndex],
-						direction);
-				const double endHitDistance =
-					pointOffsetFromCellPlane(
-						clampedCells[i],
-						cells[i].hitPoints[hitIndex + 1],
-						direction);
-				addQuadPrism(
-					tm,
-					clampedCells[i].cellCorners,
-					startHitDistance,
-					endHitDistance,
-					direction,
-					Color::Red);
-			}
-
-			const double lastHitDistance =
-				pointOffsetFromCellPlane(
-					clampedCells[i],
-					clampedCells[i].hitPoints.back(),
-					direction);
-			addQuadPrism(
-				tm,
-				clampedCells[i].cellCorners,
-				lastHitDistance,
-				moldDistance,
-				direction,
-				Color::Red);
-
-			if (cells[i].distance != clampedCells[i].distance) {
-				addQuadPrism(
-					tm,
-					clampedCells[i].cellCorners,
-					clampedCells[i].distance,
-					cells[i].distance,
-					direction,
-					Color::Red);
-			}
-		}
-		else {
-			addQuadPrism(
-				tm,
-				clampedCells[i].cellCorners,
-				clampedCells[i].distance,
-				moldDistance,
-				direction,
-				Color::Red);
-		}
-	}
-
-	return tm;
-}
-
-static void addSegment(
-	vcl::EdgeMesh& em,
-	const vcl::Point3d& a,
-	const vcl::Point3d& b)
-{
-	const vcl::uint va = em.addVertex(a);
-	const vcl::uint vb = em.addVertex(b);
-
-	em.addEdge(va, vb);
-}
-
 static vcl::TriMesh makeDebugPlaneMesh(
 	const GridChoice& grid,
 	const vcl::Point3d& planePoint,
@@ -352,40 +246,6 @@ static vcl::TriMesh makeDebugPlaneMesh(
 	planeMesh.addFace(v0, v2, v3);
 
 	return planeMesh;
-}
-
-static vcl::EdgeMesh createPerimeterSegments(
-	const std::vector<vcl::uint>& componentIndices,
-	const std::vector<CellData>& cells,
-	const GridChoice& grid)
-{
-	using namespace vcl;
-
-	EdgeMesh em;
-
-	std::unordered_set<uint> componentSet(
-		componentIndices.begin(), componentIndices.end());
-
-	for (uint idx : componentIndices) {
-		const uint row = idx / grid.cols;
-		const uint col = idx % grid.cols;
-		const CellData& cell = cells[idx];
-
-		if (col == 0 || componentSet.count(idx - 1) == 0) {
-			addSegment(em, cell.cellCorners[0], cell.cellCorners[3]);
-		}
-		if (col + 1 == grid.cols || componentSet.count(idx + 1) == 0) {
-			addSegment(em, cell.cellCorners[1], cell.cellCorners[2]);
-		}
-		if (row == 0 || componentSet.count(idx - grid.cols) == 0) {
-			addSegment(em, cell.cellCorners[0], cell.cellCorners[1]);
-		}
-		if (row + 1 == grid.rows || componentSet.count(idx + grid.cols) == 0) {
-			addSegment(em, cell.cellCorners[3], cell.cellCorners[2]);
-		}
-	}
-
-	return em;
 }
 
 #endif

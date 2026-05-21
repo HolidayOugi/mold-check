@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <unordered_set>
 #include <vector>
 
 #include <vclib/meshes.h>
@@ -197,99 +196,73 @@ static double coneBoundaryStep(
 	return t;
 }
 
-static bool isSameDistanceCell(
+static HitCellShapeData hitCellShape(
 	const std::vector<CellData>& cells,
-	const std::vector<CellData>& clampedCells,
-	vcl::uint idx,
-	float eps)
-{
-	return cells[idx].hasHit &&
-		   clampedCells[idx].hasHit &&
-		   std::abs(cells[idx].distance - clampedCells[idx].distance) <= eps;
-}
-
-static void pushNeighbor(
-	std::vector<vcl::uint>& stack,
-	std::vector<bool>& visited,
-	const std::vector<CellData>& cells,
-	const std::vector<CellData>& clampedCells,
-	vcl::uint neighbor,
-	float eps)
-{
-	if (!visited[neighbor] &&
-		isSameDistanceCell(cells, clampedCells, neighbor, eps)) {
-		visited[neighbor] = true;
-		stack.push_back(neighbor);
-	}
-}
-
-static double componentGridPerimeter(
-	const std::vector<vcl::uint>& componentIndices,
 	const GridChoice& grid)
 {
 	using namespace vcl;
 
-	double perimeter = 0.0;
-	std::unordered_set<uint> componentSet(
-		componentIndices.begin(), componentIndices.end());
+	HitCellShapeData result;
 
-	for (uint idx : componentIndices) {
+	if (cells.size() != grid.rows * grid.cols) {
+		return result;
+	}
+
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		if (!cells[idx].hasHit) {
+			continue;
+		}
+
+		result.area += grid.sideU * grid.sideV;
+
 		const uint row = idx / grid.cols;
 		const uint col = idx % grid.cols;
 
-		if (col == 0 || componentSet.count(idx - 1) == 0) {
-			perimeter += grid.sideV;
+		if (col == 0 || !cells[idx - 1].hasHit) {
+			result.perimeter += grid.sideV;
 		}
-		if (col + 1 == grid.cols || componentSet.count(idx + 1) == 0) {
-			perimeter += grid.sideV;
+		if (col + 1 == grid.cols || !cells[idx + 1].hasHit) {
+			result.perimeter += grid.sideV;
 		}
-		if (row == 0 || componentSet.count(idx - grid.cols) == 0) {
-			perimeter += grid.sideU;
+		if (row == 0 || !cells[idx - grid.cols].hasHit) {
+			result.perimeter += grid.sideU;
 		}
-		if (row + 1 == grid.rows || componentSet.count(idx + grid.cols) == 0) {
-			perimeter += grid.sideU;
+		if (row + 1 == grid.rows || !cells[idx + grid.cols].hasHit) {
+			result.perimeter += grid.sideU;
 		}
 	}
 
-	return perimeter;
+	result.compactness =
+		(result.perimeter > 0.0) ?
+			(4.0 * M_PI * result.area) / (result.perimeter * result.perimeter) :
+			0.0;
+
+	return result;
 }
 
-static std::vector<vcl::uint> squareNeighborIndices(
+static std::vector<vcl::uint> crossNeighborIndices(
 	vcl::uint idx,
-	const GridChoice& grid,
-	vcl::uint squareSize)
+	const GridChoice& grid)
 {
 	using namespace vcl;
 
 	const uint row = idx / grid.cols;
 	const uint col = idx % grid.cols;
-	const int radius = static_cast<int>(squareSize / 2);
 
 	std::vector<uint> neighbors;
-	neighbors.reserve(squareSize * squareSize);
+	neighbors.reserve(4);
 
-	for (int rowOffset = -radius; rowOffset <= radius; ++rowOffset) {
-		for (int colOffset = -radius; colOffset <= radius; ++colOffset) {
-			const int neighborRow = static_cast<int>(row) + rowOffset;
-			const int neighborCol = static_cast<int>(col) + colOffset;
-
-			if (neighborRow < 0 ||
-				neighborCol < 0 ||
-				neighborRow >= static_cast<int>(grid.rows) ||
-				neighborCol >= static_cast<int>(grid.cols)) {
-				continue;
-			}
-
-			const uint neighborIdx =
-				static_cast<uint>(neighborRow) * grid.cols +
-				static_cast<uint>(neighborCol);
-
-			if (neighborIdx == idx) {
-				continue;
-			}
-
-			neighbors.push_back(neighborIdx);
-		}
+	if (col > 0) {
+		neighbors.push_back(idx - 1);
+	}
+	if (col + 1 < grid.cols) {
+		neighbors.push_back(idx + 1);
+	}
+	if (row > 0) {
+		neighbors.push_back(idx - grid.cols);
+	}
+	if (row + 1 < grid.rows) {
+		neighbors.push_back(idx + grid.cols);
 	}
 
 	return neighbors;
@@ -297,8 +270,7 @@ static std::vector<vcl::uint> squareNeighborIndices(
 
 static void erodeHitMaskOnce(
 	std::vector<CellData>& cells,
-	const GridChoice& grid,
-	vcl::uint squareSize)
+	const GridChoice& grid)
 {
 	using namespace vcl;
 
@@ -310,7 +282,7 @@ static void erodeHitMaskOnce(
 		}
 
 		bool keep = true;
-		for (uint neighborIdx : squareNeighborIndices(idx, grid, squareSize)) {
+		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
 			if (!cells[neighborIdx].hasHit) {
 				keep = false;
 				break;
@@ -327,8 +299,7 @@ static void erodeHitMaskOnce(
 
 static void dilateHitMaskOnce(
 	std::vector<CellData>& cells,
-	const GridChoice& grid,
-	vcl::uint squareSize)
+	const GridChoice& grid)
 {
 	using namespace vcl;
 
@@ -336,7 +307,7 @@ static void dilateHitMaskOnce(
 
 	for (uint idx = 0; idx < cells.size(); ++idx) {
 		bool add = cells[idx].hasHit;
-		for (uint neighborIdx : squareNeighborIndices(idx, grid, squareSize)) {
+		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
 			if (cells[neighborIdx].hasHit) {
 				add = true;
 				break;
@@ -354,7 +325,6 @@ static void dilateHitMaskOnce(
 static std::vector<CellData> removeDistanceJumpPoints(
 	const std::vector<CellData>& cells,
 	const GridChoice& grid,
-	vcl::uint squareSize,
 	double distanceThreshold)
 {
 	using namespace vcl;
@@ -370,7 +340,7 @@ static std::vector<CellData> removeDistanceJumpPoints(
 			continue;
 		}
 
-		for (uint neighborIdx : squareNeighborIndices(idx, grid, squareSize)) {
+		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
 			if (!cells[neighborIdx].hasHit) {
 				continue;
 			}
@@ -388,8 +358,7 @@ static std::vector<CellData> removeDistanceJumpPoints(
 
 static std::vector<CellData> keepLargestHitComponent(
 	const std::vector<CellData>& cells,
-	const GridChoice& grid,
-	vcl::uint squareSize)
+	const GridChoice& grid)
 {
 	using namespace vcl;
 
@@ -412,7 +381,7 @@ static std::vector<CellData> keepLargestHitComponent(
 			stack.pop_back();
 			component.push_back(idx);
 
-			for (uint neighborIdx : squareNeighborIndices(idx, grid, squareSize)) {
+			for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
 				if (!visited[neighborIdx] && cells[neighborIdx].hasHit) {
 					visited[neighborIdx] = true;
 					stack.push_back(neighborIdx);
