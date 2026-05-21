@@ -388,14 +388,46 @@ static std::vector<CellData> smoothMissingDepthCells(
 	std::vector<uint> allCells(depthCells.size());
 	std::iota(allCells.begin(), allCells.end(), 0);
 
-	std::vector<CellData> currentDepthCells = depthCells;
 	const int radius = static_cast<int>(squareSize / 2);
+	std::vector<std::vector<uint>> neighborsByCell(depthCells.size());
+
+	parallelFor(allCells, [&](uint idx) {
+		const uint centerRow = idx / grid.cols;
+		const uint centerCol = idx % grid.cols;
+
+		for (int rowOffset = -radius; rowOffset <= radius; ++rowOffset) {
+			for (int colOffset = -radius; colOffset <= radius; ++colOffset) {
+				const int row = static_cast<int>(centerRow) + rowOffset;
+				const int col = static_cast<int>(centerCol) + colOffset;
+
+				if (row < 0 ||
+					col < 0 ||
+					row >= static_cast<int>(grid.rows) ||
+					col >= static_cast<int>(grid.cols)) {
+					continue;
+				}
+
+				const uint neighborIdx =
+					static_cast<uint>(row) * grid.cols +
+					static_cast<uint>(col);
+
+				if (neighborIdx != idx) {
+					neighborsByCell[idx].push_back(neighborIdx);
+				}
+			}
+		}
+	});
+
+	std::vector<double> currentDistances(depthCells.size(), 0.0);
+	for (uint idx = 0; idx < depthCells.size(); ++idx) {
+		currentDistances[idx] = depthCells[idx].distance;
+	}
 
 	for (uint iteration = 0; iteration < maxIterations; ++iteration) {
-		std::vector<CellData> nextDepthCells = currentDepthCells;
+		std::vector<double> nextDistances = currentDistances;
 
 		parallelFor(allCells, [&](uint idx) {
-			const bool isMissingDepthCell = !currentDepthCells[idx].hasHit;
+			const bool isMissingDepthCell = !depthCells[idx].hasHit;
 			const bool isClampedCloserCell =
 				cells[idx].hasHit &&
 				clampedCells[idx].hasHit &&
@@ -405,47 +437,23 @@ static std::vector<CellData> smoothMissingDepthCells(
 				return;
 			}
 
-			const uint centerRow = idx / grid.cols;
-			const uint centerCol = idx % grid.cols;
-
 			double distanceSum = 0.0;
 			uint distanceCount = 0;
-			double minAllowedDistance = -std::numeric_limits<double>::infinity();
 			double maxAllowedDistance = std::numeric_limits<double>::infinity();
 
 			if (isMissingDepthCell) {
 				maxAllowedDistance = cells[idx].distance;
 			}
 
-			for (int rowOffset = -radius; rowOffset <= radius; ++rowOffset) {
-				for (int colOffset = -radius; colOffset <= radius; ++colOffset) {
-					const int row = static_cast<int>(centerRow) + rowOffset;
-					const int col = static_cast<int>(centerCol) + colOffset;
+			for (uint neighborIdx : neighborsByCell[idx]) {
+				distanceSum += currentDistances[neighborIdx];
+				++distanceCount;
 
-					if (row < 0 ||
-						col < 0 ||
-						row >= static_cast<int>(grid.rows) ||
-						col >= static_cast<int>(grid.cols)) {
-						continue;
-					}
-
-					const uint neighborIdx =
-						static_cast<uint>(row) * grid.cols +
-						static_cast<uint>(col);
-
-					if (neighborIdx == idx) {
-						continue;
-					}
-
-					distanceSum += currentDepthCells[neighborIdx].distance;
-					++distanceCount;
-
-					if (cells[neighborIdx].hasHit &&
-						clampedCells[neighborIdx].hasHit &&
-						clampedCells[neighborIdx].distance != cells[neighborIdx].distance) {
-						maxAllowedDistance =
-							std::min(maxAllowedDistance, clampedCells[neighborIdx].distance);
-					}
+				if (cells[neighborIdx].hasHit &&
+					clampedCells[neighborIdx].hasHit &&
+					clampedCells[neighborIdx].distance != cells[neighborIdx].distance) {
+					maxAllowedDistance =
+						std::min(maxAllowedDistance, clampedCells[neighborIdx].distance);
 				}
 			}
 
@@ -455,24 +463,24 @@ static std::vector<CellData> smoothMissingDepthCells(
 
 			double newDistance = distanceSum / distanceCount;
 
-			if (minAllowedDistance > -std::numeric_limits<double>::infinity()) {
-				newDistance = std::max(newDistance, minAllowedDistance);
-			}
-
 			if (maxAllowedDistance < std::numeric_limits<double>::infinity()) {
 				newDistance = std::min(newDistance, maxAllowedDistance);
 			}
 
-			nextDepthCells[idx].distance = newDistance;
-			nextDepthCells[idx].hitPoints = {
-				nextDepthCells[idx].cellCenter +
-				direction * nextDepthCells[idx].distance};
+			nextDistances[idx] = newDistance;
 		});
 
-		currentDepthCells = std::move(nextDepthCells);
+		currentDistances = std::move(nextDistances);
 	}
 
-	return currentDepthCells;
+	std::vector<CellData> result = depthCells;
+	for (uint idx = 0; idx < result.size(); ++idx) {
+		result[idx].distance = currentDistances[idx];
+		result[idx].hitPoints = {
+			result[idx].cellCenter + direction * result[idx].distance};
+	}
+
+	return result;
 }
 
 static std::vector<CellData> fixDepthCellConeViolations(

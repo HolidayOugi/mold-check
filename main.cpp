@@ -224,7 +224,7 @@ MoldCheckMetrics moldCheck(
 				direction,
 				grid,
 				7,
-				5000);
+				10000);
 
 	}
 
