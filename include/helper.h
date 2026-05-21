@@ -3,6 +3,7 @@
 
 #include "struct.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <unordered_set>
@@ -251,6 +252,194 @@ static double componentGridPerimeter(
 	}
 
 	return perimeter;
+}
+
+static std::vector<vcl::uint> squareNeighborIndices(
+	vcl::uint idx,
+	const GridChoice& grid,
+	vcl::uint squareSize)
+{
+	using namespace vcl;
+
+	const uint row = idx / grid.cols;
+	const uint col = idx % grid.cols;
+	const int radius = static_cast<int>(squareSize / 2);
+
+	std::vector<uint> neighbors;
+	neighbors.reserve(squareSize * squareSize);
+
+	for (int rowOffset = -radius; rowOffset <= radius; ++rowOffset) {
+		for (int colOffset = -radius; colOffset <= radius; ++colOffset) {
+			const int neighborRow = static_cast<int>(row) + rowOffset;
+			const int neighborCol = static_cast<int>(col) + colOffset;
+
+			if (neighborRow < 0 ||
+				neighborCol < 0 ||
+				neighborRow >= static_cast<int>(grid.rows) ||
+				neighborCol >= static_cast<int>(grid.cols)) {
+				continue;
+			}
+
+			const uint neighborIdx =
+				static_cast<uint>(neighborRow) * grid.cols +
+				static_cast<uint>(neighborCol);
+
+			if (neighborIdx == idx) {
+				continue;
+			}
+
+			neighbors.push_back(neighborIdx);
+		}
+	}
+
+	return neighbors;
+}
+
+static void erodeHitMaskOnce(
+	std::vector<CellData>& cells,
+	const GridChoice& grid,
+	vcl::uint squareSize)
+{
+	using namespace vcl;
+
+	std::vector<bool> nextHasHit(cells.size(), false);
+
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		if (!cells[idx].hasHit) {
+			continue;
+		}
+
+		bool keep = true;
+		for (uint neighborIdx : squareNeighborIndices(idx, grid, squareSize)) {
+			if (!cells[neighborIdx].hasHit) {
+				keep = false;
+				break;
+			}
+		}
+
+		nextHasHit[idx] = keep;
+	}
+
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		cells[idx].hasHit = nextHasHit[idx];
+	}
+}
+
+static void dilateHitMaskOnce(
+	std::vector<CellData>& cells,
+	const GridChoice& grid,
+	vcl::uint squareSize)
+{
+	using namespace vcl;
+
+	std::vector<bool> nextHasHit(cells.size(), false);
+
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		bool add = cells[idx].hasHit;
+		for (uint neighborIdx : squareNeighborIndices(idx, grid, squareSize)) {
+			if (cells[neighborIdx].hasHit) {
+				add = true;
+				break;
+			}
+		}
+
+		nextHasHit[idx] = add;
+	}
+
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		cells[idx].hasHit = nextHasHit[idx];
+	}
+}
+
+static std::vector<CellData> removeDistanceJumpPoints(
+	const std::vector<CellData>& cells,
+	const GridChoice& grid,
+	vcl::uint squareSize,
+	double distanceThreshold)
+{
+	using namespace vcl;
+
+	if (distanceThreshold <= 0.0) {
+		return cells;
+	}
+
+	std::vector<CellData> result = cells;
+
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		if (!cells[idx].hasHit) {
+			continue;
+		}
+
+		for (uint neighborIdx : squareNeighborIndices(idx, grid, squareSize)) {
+			if (!cells[neighborIdx].hasHit) {
+				continue;
+			}
+
+			if (std::abs(cells[idx].distance - cells[neighborIdx].distance) >
+				distanceThreshold) {
+				result[idx].hasHit = false;
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+static std::vector<CellData> keepLargestHitComponent(
+	const std::vector<CellData>& cells,
+	const GridChoice& grid,
+	vcl::uint squareSize)
+{
+	using namespace vcl;
+
+	std::vector<bool> visited(cells.size(), false);
+	std::vector<uint> largestComponent;
+
+	for (uint start = 0; start < cells.size(); ++start) {
+		if (visited[start] || !cells[start].hasHit) {
+			continue;
+		}
+
+		std::vector<uint> component;
+		std::vector<uint> stack;
+
+		visited[start] = true;
+		stack.push_back(start);
+
+		while (!stack.empty()) {
+			const uint idx = stack.back();
+			stack.pop_back();
+			component.push_back(idx);
+
+			for (uint neighborIdx : squareNeighborIndices(idx, grid, squareSize)) {
+				if (!visited[neighborIdx] && cells[neighborIdx].hasHit) {
+					visited[neighborIdx] = true;
+					stack.push_back(neighborIdx);
+				}
+			}
+		}
+
+		if (component.size() > largestComponent.size()) {
+			largestComponent = std::move(component);
+		}
+	}
+
+	if (largestComponent.empty()) {
+		return cells;
+	}
+
+	std::unordered_set<uint> keep(
+		largestComponent.begin(), largestComponent.end());
+	std::vector<CellData> result = cells;
+
+	for (uint idx = 0; idx < result.size(); ++idx) {
+		if (result[idx].hasHit && keep.count(idx) == 0) {
+			result[idx].hasHit = false;
+		}
+	}
+
+	return result;
 }
 
 #endif

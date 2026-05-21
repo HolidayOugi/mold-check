@@ -27,6 +27,7 @@
 
 
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -131,18 +132,31 @@ MoldCheckMetrics moldCheck(
 		cells[idx] = shootRayOnCell(cell, m, scene, planePoint, direction, MAX_DISTANCE, RAY_EPS);
 	});
 
+	const double REDUCE_POINTS_DISTANCE_THRESHOLD =
+		0.03 * MAX_DISTANCE;
+	cells = reducePoints(
+		cells,
+		grid,
+		3,
+		REDUCE_POINTS_DISTANCE_THRESHOLD);
+
     std::vector<CellData> clampedCells = cells;
 
         
 	if (debug) {
             std::cout << "Ray casting complete. Hit points: ";
             uint hitCount = 0;
+			uint keepCount = 0;
 			for (uint i = 0; i < cells.size(); ++i) {
 				if (cells[i].distance < MAX_DISTANCE) {
                     ++hitCount;
                 }
-            }
+				if (cells[i].hasHit) {
+					++keepCount;
+				}
+			}
             std::cout << hitCount << "/" << allCells.size() << " cells \n";
+			std::cout << keepCount << "/" << allCells.size() << " cells after reduction \n";
 			std::cout << "Beginning Clamping phase...\n";
 			std::cout.flush();
 	}
@@ -194,6 +208,8 @@ MoldCheckMetrics moldCheck(
 	std::vector<CellData> depthCells = cells;
 
 	if (debug) {
+
+		std::cout << "Clamping complete. Beginning Depth Smoothing phase...\n";
 
 		depthCells =
 			smoothMissingDepthCells(
@@ -262,8 +278,15 @@ MoldCheckMetrics moldCheck(
 		PolyMesh hitPointsMesh;
 		hitPointsMesh.enablePerVertexColor();
 		for (uint i = 0; i < cells.size(); ++i) {
-			if (!cells[i].hasHit) continue;
+			if (cells[i].distance == MAX_DISTANCE) continue;
 			addColoredPoint(hitPointsMesh, cells[i].hitPoints[0], Color::Yellow);
+		}
+
+		PolyMesh hitPointsafterReductionMesh;
+		hitPointsafterReductionMesh.enablePerVertexColor();
+		for (uint i = 0; i < cells.size(); ++i) {
+			if (!cells[i].hasHit) continue;
+			addColoredPoint(hitPointsafterReductionMesh, cells[i].hitPoints[0], Color::Blue);
 		}
 		
 		PolyMesh clampedonlyPointsMesh;
@@ -342,6 +365,7 @@ MoldCheckMetrics moldCheck(
 		const std::string base =
 			(debugOutputDir / "mold_check").string();
 		saveMesh(hitPointsMesh, base + "_hit_points.ply");
+		saveMesh(hitPointsafterReductionMesh, base + "_hit_points_after_reduction.ply");
 		saveMesh(clampedonlyPointsMesh, base + "_clamped_only_points.ply");
 		saveMesh(clampedPointsMesh, base + "_all_clamped_points.ply");
 		saveMesh(depthPointsMesh, base + "_depth_points.ply");
@@ -378,6 +402,7 @@ MoldCheckMetrics moldCheck(
 				  << metrics.score << "\n";
 		std::cout << "Saved debug meshes:\n"
 				<< " - " << base << "_hit_points.ply\n"
+				<< " - " << base << "_hit_points_after_reduction.ply\n"
 				<< " - " << base << "_clamped_only_points.ply\n"
 				<< " - " << base << "_all_clamped_points.ply\n"
 				<< " - " << base << "_depth_points.ply\n"
@@ -399,7 +424,7 @@ int main()
 
 	const auto startTime = std::chrono::steady_clock::now();
 
-	const uint NUM_PLANES = 10;
+	const uint NUM_PLANES = 50;
 
 	std::vector<Point3d> fibNormals = sphericalFibonacciPointSet<Point3d>(NUM_PLANES);
 

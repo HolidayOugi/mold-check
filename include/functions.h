@@ -215,15 +215,17 @@ static CellData shootRayOnCell(
 		//facesIntersectedbyRay has -eps built in
 		auto rayHits = scene.facesIntersectedByRay(rayOrigin, direction, eps);
 		std::unordered_set<uint> seenFaceIds;
-		rayHits.erase(
-			std::remove_if(
-				rayHits.begin(),
-				rayHits.end(),
-				[&](const auto& rayHit) {
-					const uint hitFaceId = std::get<0>(rayHit);
-					return !seenFaceIds.insert(hitFaceId).second;
-				}),
-			rayHits.end());
+		decltype(rayHits) uniqueRayHits;
+		uniqueRayHits.reserve(rayHits.size());
+
+		for (const auto& rayHit : rayHits) {
+			const uint hitFaceId = std::get<0>(rayHit);
+			if (seenFaceIds.insert(hitFaceId).second) {
+				uniqueRayHits.push_back(rayHit);
+			}
+		}
+
+		rayHits = std::move(uniqueRayHits);
 
 		//fallback for possible missed hit due to numerical issues in firstFaceIntersectedByRay and silent crash
 		//possible bug to fix
@@ -430,6 +432,33 @@ static std::vector<CellData> makeDepthCells(
 	}
 
 	return depthCells;
+}
+
+static std::vector<CellData> reducePoints(
+	std::vector<CellData> cells,
+	const GridChoice& grid,
+	vcl::uint squareSize = 3,
+	double distanceThreshold = std::numeric_limits<double>::infinity())
+{
+	using namespace vcl;
+
+	if (cells.size() != grid.rows * grid.cols) {
+		return cells;
+	}
+
+	erodeHitMaskOnce(cells, grid, squareSize);
+	erodeHitMaskOnce(cells, grid, squareSize);
+	dilateHitMaskOnce(cells, grid, squareSize);
+	dilateHitMaskOnce(cells, grid, squareSize);
+
+	cells = removeDistanceJumpPoints(
+		cells,
+		grid,
+		squareSize,
+		distanceThreshold);
+	cells = keepLargestHitComponent(cells, grid, squareSize);
+
+	return cells;
 }
 
 static std::vector<CellData> smoothMissingDepthCells(
