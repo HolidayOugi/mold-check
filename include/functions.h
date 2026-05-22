@@ -283,23 +283,20 @@ static CellData computeClampedCell(
 }
 
 static std::vector<CellData> makeDepthCells(
-	const std::vector<CellData>& cells,
 	const std::vector<CellData>& clampedCells,
 	const vcl::Point3d& direction,
 	const GridChoice& grid)
 {
-	if (cells.size() != clampedCells.size() ||
-		cells.size() != grid.rows * grid.cols) {
+	if (clampedCells.size() != grid.rows * grid.cols) {
 		return {};
 	}
 
-	std::vector<CellData> depthCells = cells;
+	std::vector<CellData> depthCells = clampedCells;
 	double distanceSum = 0.0;
 	vcl::uint hitCount = 0;
 
-	for (vcl::uint i = 0; i < cells.size(); ++i) {
-		if (cells[i].hasHit) {
-			depthCells[i] = clampedCells[i];
+	for (vcl::uint i = 0; i < clampedCells.size(); ++i) {
+		if (clampedCells[i].hasHit) {
 			depthCells[i].hitPoints = {
 				depthCells[i].cellCenter +
 				direction * depthCells[i].distance};
@@ -308,16 +305,16 @@ static std::vector<CellData> makeDepthCells(
 			const vcl::uint col = i % grid.cols;
 			bool hasMissingNeighbor = false;
 
-			if (col > 0 && !cells[i - 1].hasHit) {
+			if (col > 0 && !clampedCells[i - 1].hasHit) {
 				hasMissingNeighbor = true;
 			}
-			if (col + 1 < grid.cols && !cells[i + 1].hasHit) {
+			if (col + 1 < grid.cols && !clampedCells[i + 1].hasHit) {
 				hasMissingNeighbor = true;
 			}
-			if (row > 0 && !cells[i - grid.cols].hasHit) {
+			if (row > 0 && !clampedCells[i - grid.cols].hasHit) {
 				hasMissingNeighbor = true;
 			}
-			if (row + 1 < grid.rows && !cells[i + grid.cols].hasHit) {
+			if (row + 1 < grid.rows && !clampedCells[i + grid.cols].hasHit) {
 				hasMissingNeighbor = true;
 			}
 
@@ -436,7 +433,6 @@ static std::vector<CellData> smoothMissingDepthCells(
 		parallelFor(allCells, [&](uint idx) {
 			const bool isMissingDepthCell = !depthCells[idx].hasHit;
 			const bool isClampedCloserCell =
-				cells[idx].hasHit &&
 				clampedCells[idx].hasHit &&
 				clampedCells[idx].distance < cells[idx].distance;
 
@@ -449,15 +445,14 @@ static std::vector<CellData> smoothMissingDepthCells(
 			double maxAllowedDistance = std::numeric_limits<double>::infinity();
 
 			if (isMissingDepthCell) {
-				maxAllowedDistance = cells[idx].distance;
+				maxAllowedDistance = clampedCells[idx].distance;
 			}
 
 			for (uint neighborIdx : neighborsByCell[idx]) {
 				distanceSum += currentDistances[neighborIdx];
 				++distanceCount;
 
-				if (cells[neighborIdx].hasHit &&
-					clampedCells[neighborIdx].hasHit &&
+				if (clampedCells[neighborIdx].hasHit &&
 					clampedCells[neighborIdx].distance != cells[neighborIdx].distance) {
 					maxAllowedDistance =
 						std::min(maxAllowedDistance, clampedCells[neighborIdx].distance);

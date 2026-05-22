@@ -227,7 +227,7 @@ MoldCheckMetrics moldCheck(
 
 		depthCells =
 			smoothMissingDepthCells(
-				makeDepthCells(cells, clampedCells, direction, grid),
+				makeDepthCells(clampedCells, direction, grid),
 				cells,
 				clampedCells,
 				direction,
@@ -271,14 +271,6 @@ MoldCheckMetrics moldCheck(
 			addColoredPoint(hitPointsafterReductionMesh, clampedCells[i].hitPoints[0], Color::Blue);
 		}
 		
-		PolyMesh clampedonlyPointsMesh;
-		clampedonlyPointsMesh.enablePerVertexColor();
-		for (uint i = 0; i < clampedCells.size(); ++i) {
-			if (!cells[i].hasHit) continue;
-			if (cells[i].distance == clampedCells[i].distance) continue;
-			addColoredPoint(clampedonlyPointsMesh, clampedCells[i].hitPoints[0], Color::Red);
-		}
-		
 		PolyMesh clampedPointsMesh;
 		clampedPointsMesh.enablePerVertexColor();
 		for (uint i = 0; i < clampedCells.size(); ++i) {
@@ -316,13 +308,6 @@ MoldCheckMetrics moldCheck(
 		const TriMesh planeMesh =
 			makeDebugPlaneMesh(grid, planePoint, u, v);
 
-		TriMesh remainingMoldMesh;
-		for (uint i = 0; i < clampedCells.size(); ++i) {
-			if (!cells[i].hasHit) continue;
-			if (cells[i].distance == clampedCells[i].distance) continue;
-			addQuadPrism(remainingMoldMesh, clampedCells[i].cellCorners, clampedCells[i].distance, cells[i].distance, direction, vcl::Color::Red);
-		}
-
 		const TriMesh moldSurfaceMesh = createMoldSurface(depthCells, grid, direction);
 
 		
@@ -343,11 +328,9 @@ MoldCheckMetrics moldCheck(
 			(debugOutputDir / "mold_check").string();
 		saveMesh(hitPointsMesh, base + "_hit_points.ply");
 		saveMesh(hitPointsafterReductionMesh, base + "_hit_points_after_reduction.ply");
-		saveMesh(clampedonlyPointsMesh, base + "_clamped_only_points.ply");
 		saveMesh(clampedPointsMesh, base + "_all_clamped_points.ply");
 		saveMesh(depthPointsMesh, base + "_depth_points.ply");
 		saveMesh(planeMesh, base + "_plane.ply");
-		saveMesh(remainingMoldMesh, base + "_remaining_mold.ply");
 		saveMesh(moldSurfaceMesh, base + "_mold_surface.ply");
 		saveMesh(violatingPointsMesh, base + "_violating_points.ply");
 		
@@ -383,11 +366,9 @@ MoldCheckMetrics moldCheck(
 		std::cout << "Saved debug meshes:\n"
 				<< " - " << base << "_hit_points.ply\n"
 				<< " - " << base << "_hit_points_after_reduction.ply\n"
-				<< " - " << base << "_clamped_only_points.ply\n"
 				<< " - " << base << "_all_clamped_points.ply\n"
 				<< " - " << base << "_depth_points.ply\n"
 				<< " - " << base << "_plane.ply\n"
-				<< " - " << base << "_remaining_mold.ply\n"
 				<< " - " << base << "_mold_surface.ply\n"
 				<< " - " << base << "_violating_points.ply\n";
 
