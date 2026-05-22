@@ -57,10 +57,10 @@ static double moldQualityScore(
 	double percentHidden)
 {
 	return
-		0.40 * hitRatio +
-		0.30 * compactness +
-		0.15 * (1 - (percentHidden / 100.0)) +
-		0.15 * (1 - (percentClamped / 100.0));
+		0.35 * hitRatio +
+		0.25 * compactness +
+		0.20 * (1 - (percentHidden / 100.0)) +
+		0.20 * (1 - (percentClamped / 100.0));
 }
 
 MoldCheckMetrics moldCheck(
@@ -151,7 +151,7 @@ MoldCheckMetrics moldCheck(
 		computeClampedCell(idx, cells, planePoint, direction, CONE_COS_THRESHOLD, EPS);
 	});
 
-	const double REDUCE_POINTS_DISTANCE_THRESHOLD =	0.03 * MAX_DISTANCE;
+	const double REDUCE_POINTS_DISTANCE_THRESHOLD =	0.02 * MAX_DISTANCE;
 	cells = reducePoints(
 		cells,
 		grid,
@@ -213,7 +213,7 @@ MoldCheckMetrics moldCheck(
 	if (debug) {
 
 		std::cout << "Beginning Depth Smoothing phase...\n";
-
+		/*
 		depthCells =
 			smoothMissingDepthCells(
 				makeDepthCells(cells, direction, grid),
@@ -222,7 +222,15 @@ MoldCheckMetrics moldCheck(
 				grid,
 				3,
 				20000);
+		*/
 
+		depthCells =
+			makeDepthCellsPullPush(
+				cells,
+				direction,
+				grid,
+				CONE_COS_THRESHOLD,
+				EPS);
 	}
 
 	if (debug) {
@@ -251,7 +259,7 @@ MoldCheckMetrics moldCheck(
 			if (cells[i].distance == MAX_DISTANCE) continue;
 			addColoredPoint(
 				hitPointsMesh,
-				cells[i].cellCenter + direction * cells[i].clampedDistance,
+				cells[i].cellCenter + direction * cells[i].distance,
 				Color::Yellow);
 		}
 
@@ -261,14 +269,14 @@ MoldCheckMetrics moldCheck(
 			if (!cells[i].hasHit) continue;
 			addColoredPoint(
 				hitPointsafterReductionMesh,
-				cells[i].cellCenter + direction * cells[i].clampedDistance,
+				cells[i].cellCenter + direction * cells[i].distance,
 				Color::Blue);
 		}
 		
 		PolyMesh clampedPointsMesh;
 		clampedPointsMesh.enablePerVertexColor();
 		for (uint i = 0; i < cells.size(); ++i) {
-			if (!cells[i].hasClampedHit) continue;
+			if (!cells[i].hasHit) continue;
 			addColoredPoint(
 				clampedPointsMesh,
 				cells[i].cellCenter + direction * cells[i].clampedDistance,

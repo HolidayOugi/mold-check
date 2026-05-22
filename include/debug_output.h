@@ -32,10 +32,23 @@ vcl::PolyMesh validateClampedCells(
 	using namespace vcl;
 
 	std::atomic<uint> violatingPoints{0};
+	std::vector<uint> violatingCellIds;
+	violatingCellIds.reserve(cells.size());
+	std::vector<std::atomic_bool> isViolating(cells.size());
+	std::vector<uint> violatingOtherCellIds(cells.size(), 0);
+	std::vector<double> violatingCosValues(cells.size(), 0.0);
+	for (std::atomic_bool& value : isViolating) {
+		value.store(false);
+	}
+
 	PolyMesh violatingPointsMesh;
 	violatingPointsMesh.enablePerVertexColor();
 
 	vcl::parallelFor(allCells, [&](uint i) {
+		if (i >= cells.size() || cells[i].hitPoints.empty()) {
+			return;
+		}
+
 		//if (!cells[i].hasHit) {
 		//	return;
 		//}
@@ -44,7 +57,7 @@ vcl::PolyMesh validateClampedCells(
 
 		for (uint j = 0; j < cells.size(); ++j) {
 			//if (i == j || !cells[j].hasHit) {
-			if (i == j) {
+			if (i == j || cells[j].hitPoints.empty()) {
 				continue;
 			}
 
@@ -62,14 +75,28 @@ vcl::PolyMesh validateClampedCells(
 
 			if (cosVal > coneCosThreshold + eps) {
 				violatingPoints.fetch_add(1);
-				addColoredPoint(violatingPointsMesh, point, Color::Magenta);
-				std::cout << "Violation between cells " << i << " and " << j << ": cosVal = " << cosVal << ", cosThreshold = " << coneCosThreshold + eps << "\n";
+				isViolating[i].store(true);
+				violatingOtherCellIds[i] = j;
+				violatingCosValues[i] = cosVal;
 				return;
 			}
 		}
 	});
 
 	const uint totalViolations = violatingPoints.load();
+	for (uint i = 0; i < cells.size(); ++i) {
+		if (isViolating[i].load()) {
+			violatingCellIds.push_back(i);
+		}
+	}
+
+	for (uint i : violatingCellIds) {
+		addColoredPoint(violatingPointsMesh, cells[i].hitPoints[0], Color::Magenta);
+		std::cout << "Violation between cells "
+				  << i << " and " << violatingOtherCellIds[i]
+				  << ": cosVal = " << violatingCosValues[i]
+				  << ", cosThreshold = " << coneCosThreshold + eps << "\n";
+	}
 
 	std::cout << "Clamped validation: "
 			  << (totalViolations == 0 ? "OK" : "VIOLATIONS")
@@ -102,13 +129,20 @@ static vcl::TriMesh createMoldSurface(
 	TriMesh tm;
 	tm.enablePerFaceColor();
 
+	if (cells.size() != grid.rows * grid.cols) {
+		return tm;
+	}
+
 	std::vector<std::vector<uint>> vertexGrid(grid.rows, std::vector<uint>(grid.cols, 0));
 
 	for (uint row = 0; row < grid.rows; row += 1) {
 		for (uint col = 0; col < grid.cols; col += 1) {
 			const uint point = row * grid.cols + col;
 
-			const Point3d p = cells[point].hitPoints[0];
+			const Point3d p =
+				cells[point].hitPoints.empty() ?
+					cells[point].cellCenter + direction * cells[point].distance :
+					cells[point].hitPoints[0];
 
 			const uint v = tm.addVertex(p);
 
