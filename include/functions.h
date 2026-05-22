@@ -229,6 +229,11 @@ static CellData computeClampedCell(
 	using namespace vcl;
 
 	const CellData baseCell = cells[i];
+
+	if (!baseCell.hasHit) {
+		return baseCell;
+	}
+
 	const Point3d original = baseCell.hitPoints[0];
 
 	double requiredT = 0.0;
@@ -359,11 +364,13 @@ static std::vector<CellData> reducePoints(
 	dilateHitMaskOnce(cells, grid);
 	dilateHitMaskOnce(cells, grid);
 
-	cells = removeDistanceJumpPoints(
+	const std::vector<std::vector<uint>> connectedNeighbors =
+		removeDistanceJumpPoints(
 		cells,
 		grid,
 		distanceThreshold);
-	cells = keepLargestHitComponent(cells, grid);
+
+	cells = keepLargestHitComponent(cells, connectedNeighbors);
 
 	return cells;
 }

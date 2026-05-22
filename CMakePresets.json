@@ -10,16 +10,12 @@
             "name": "renderMSVC-release",
             "displayName": "Render MSVC Release",
             "generator": "Ninja",
-            "architecture": {
-                "value": "x64",
-                "strategy": "external"
-            },
             "binaryDir": "${sourceDir}/build/renderMSVC-release",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_MAKE_PROGRAM": "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
                 "CMAKE_C_COMPILER": "cl.exe",
                 "CMAKE_CXX_COMPILER": "cl.exe",
+                "CMAKE_MAKE_PROGRAM": "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
                 "CMAKE_CXX_FLAGS": "/EHsc",
                 "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
                 "CMAKE_C_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",

@@ -322,7 +322,7 @@ static void dilateHitMaskOnce(
 	}
 }
 
-static std::vector<CellData> removeDistanceJumpPoints(
+static std::vector<std::vector<vcl::uint>> removeDistanceJumpPoints(
 	const std::vector<CellData>& cells,
 	const GridChoice& grid,
 	double distanceThreshold)
@@ -330,37 +330,40 @@ static std::vector<CellData> removeDistanceJumpPoints(
 	using namespace vcl;
 
 	if (distanceThreshold <= 0.0) {
-		return cells;
+		distanceThreshold = std::numeric_limits<double>::infinity();
 	}
 
-	std::vector<CellData> result = cells;
-
+	std::vector<std::vector<uint>> connectedNeighbors(cells.size());
 	for (uint idx = 0; idx < cells.size(); ++idx) {
 		if (!cells[idx].hasHit) {
 			continue;
 		}
 
 		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
-			if (!cells[neighborIdx].hasHit) {
+			if (neighborIdx <= idx || !cells[neighborIdx].hasHit) {
 				continue;
 			}
 
-			if (std::abs(cells[idx].distance - cells[neighborIdx].distance) >
+			if (std::abs(cells[idx].distance - cells[neighborIdx].distance) <=
 				distanceThreshold) {
-				result[idx].hasHit = false;
-				break;
+				connectedNeighbors[idx].push_back(neighborIdx);
+				connectedNeighbors[neighborIdx].push_back(idx);
 			}
 		}
 	}
 
-	return result;
+	return connectedNeighbors;
 }
 
 static std::vector<CellData> keepLargestHitComponent(
 	const std::vector<CellData>& cells,
-	const GridChoice& grid)
+	const std::vector<std::vector<vcl::uint>>& connectedNeighbors)
 {
 	using namespace vcl;
+
+	if (cells.size() != connectedNeighbors.size()) {
+		return cells;
+	}
 
 	std::vector<bool> visited(cells.size(), false);
 	std::vector<uint> largestComponent;
@@ -381,7 +384,7 @@ static std::vector<CellData> keepLargestHitComponent(
 			stack.pop_back();
 			component.push_back(idx);
 
-			for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
+			for (uint neighborIdx : connectedNeighbors[idx]) {
 				if (!visited[neighborIdx] && cells[neighborIdx].hasHit) {
 					visited[neighborIdx] = true;
 					stack.push_back(neighborIdx);
