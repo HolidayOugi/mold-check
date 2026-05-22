@@ -144,6 +144,8 @@ static CellData shootRayOnCell(
 			result.hitPoints = {
 				computeHitPoint(m, faceId, triId, baryCoords, invalidPoint)};
 			result.hasHit = result.hitPoints[0] != invalidPoint;
+			result.hasClampedHit = false;
+			result.clampedDistance = result.distance;
 
 			return result;
 		}
@@ -166,6 +168,8 @@ static CellData shootRayOnCell(
 						invalidPoint));
 			}
 			result.hasHit = true;
+			result.hasClampedHit = false;
+			result.clampedDistance = result.distance;
 
 			return result;
 		}
@@ -176,6 +180,8 @@ static CellData shootRayOnCell(
 	result.distance = maxDistance;
 	result.hitPoints = {invalidPoint};
 	result.hasHit = false;
+	result.hasClampedHit = false;
+	result.clampedDistance = maxDistance;
 
 	return result;
 }
@@ -214,13 +220,15 @@ static CellData makeCellGeometry(
 	cell.distance = 0.0;
 	cell.hitPoints = {cell.cellCenter};
 	cell.hasHit = false;
+	cell.hasClampedHit = false;
+	cell.clampedDistance = 0.0;
 
 	return cell;
 }
 
-static CellData computeClampedCell(
+static void computeClampedCell(
 	vcl::uint i,
-	const std::vector<CellData>& cells,
+	std::vector<CellData>& cells,
 	const vcl::Point3d& planePoint,
 	const vcl::Point3d& direction,
 	double coneCosThreshold,
@@ -231,7 +239,9 @@ static CellData computeClampedCell(
 	const CellData baseCell = cells[i];
 
 	if (!baseCell.hasHit) {
-		return baseCell;
+		cells[i].hasClampedHit = false;
+		cells[i].clampedDistance = baseCell.distance;
+		return;
 	}
 
 	const Point3d original = baseCell.hitPoints[0];
@@ -266,7 +276,9 @@ static CellData computeClampedCell(
 	}
 
 	if (!anyCone) {
-		return baseCell;
+		cells[i].hasClampedHit = false;
+		cells[i].clampedDistance = baseCell.distance;
+		return;
 	}
 
 	const Point3d currentPoint =
@@ -275,46 +287,45 @@ static CellData computeClampedCell(
 	const double distanceToPlane =
 		std::abs((currentPoint - planePoint).dot(direction));
 
-	CellData result = baseCell;
-	result.distance = distanceToPlane;
-	result.hitPoints[0] = currentPoint;
-	result.hasHit = true;
-	return result;
+	cells[i].hasClampedHit = true;
+	cells[i].clampedDistance = distanceToPlane;
 }
 
 static std::vector<CellData> makeDepthCells(
-	const std::vector<CellData>& clampedCells,
+	const std::vector<CellData>& cells,
 	const vcl::Point3d& direction,
 	const GridChoice& grid)
 {
-	if (clampedCells.size() != grid.rows * grid.cols) {
+	if (cells.size() != grid.rows * grid.cols) {
 		return {};
 	}
 
-	std::vector<CellData> depthCells = clampedCells;
+	std::vector<CellData> depthCells = cells;
 	double distanceSum = 0.0;
 	vcl::uint hitCount = 0;
 
-	for (vcl::uint i = 0; i < clampedCells.size(); ++i) {
-		if (clampedCells[i].hasHit) {
+	for (vcl::uint i = 0; i < cells.size(); ++i) {
+		if (cells[i].hasHit) {
+			depthCells[i].distance = cells[i].clampedDistance;
 			depthCells[i].hitPoints = {
 				depthCells[i].cellCenter +
 				direction * depthCells[i].distance};
+			depthCells[i].hasHit = true;
 
 			const vcl::uint row = i / grid.cols;
 			const vcl::uint col = i % grid.cols;
 			bool hasMissingNeighbor = false;
 
-			if (col > 0 && !clampedCells[i - 1].hasHit) {
+			if (col > 0 && !cells[i - 1].hasHit) {
 				hasMissingNeighbor = true;
 			}
-			if (col + 1 < grid.cols && !clampedCells[i + 1].hasHit) {
+			if (col + 1 < grid.cols && !cells[i + 1].hasHit) {
 				hasMissingNeighbor = true;
 			}
-			if (row > 0 && !clampedCells[i - grid.cols].hasHit) {
+			if (row > 0 && !cells[i - grid.cols].hasHit) {
 				hasMissingNeighbor = true;
 			}
-			if (row + 1 < grid.rows && !clampedCells[i + grid.cols].hasHit) {
+			if (row + 1 < grid.rows && !cells[i + grid.cols].hasHit) {
 				hasMissingNeighbor = true;
 			}
 
@@ -356,18 +367,29 @@ static std::vector<CellData> reducePoints(
 		return cells;
 	}
 
-	erodeHitMaskOnce(cells, grid);
-	erodeHitMaskOnce(cells, grid);
-	dilateHitMaskOnce(cells, grid);
-	dilateHitMaskOnce(cells, grid);
+	std::vector<CellData> candidateCells = cells;
+	for (CellData& cell : candidateCells) {
+		if (cell.hasClampedHit) {
+			cell.hasHit = false;
+		}
+	}
+
+	erodeHitMaskOnce(candidateCells, grid);
+	erodeHitMaskOnce(candidateCells, grid);
+	dilateHitMaskOnce(candidateCells, grid);
+	dilateHitMaskOnce(candidateCells, grid);
 
 	const std::vector<std::vector<uint>> connectedNeighbors =
 		removeDistanceJumpPoints(
-		cells,
-		grid,
-		distanceThreshold);
+			candidateCells,
+			grid,
+			distanceThreshold);
 
-	cells = keepLargestHitComponent(cells, connectedNeighbors);
+	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
+
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		cells[idx].hasHit = cells[idx].hasHit && candidateCells[idx].hasHit;
+	}
 
 	return cells;
 }
@@ -375,7 +397,6 @@ static std::vector<CellData> reducePoints(
 static std::vector<CellData> smoothMissingDepthCells(
 	const std::vector<CellData>& depthCells,
 	const std::vector<CellData>& cells,
-	const std::vector<CellData>& clampedCells,
 	const vcl::Point3d& direction,
 	const GridChoice& grid,
 	vcl::uint squareSize,
@@ -384,7 +405,6 @@ static std::vector<CellData> smoothMissingDepthCells(
 	using namespace vcl;
 
 	if (depthCells.size() != cells.size() ||
-		depthCells.size() != clampedCells.size() ||
 		depthCells.size() != grid.rows * grid.cols) {
 		return {};
 	}
@@ -433,8 +453,8 @@ static std::vector<CellData> smoothMissingDepthCells(
 		parallelFor(allCells, [&](uint idx) {
 			const bool isMissingDepthCell = !depthCells[idx].hasHit;
 			const bool isClampedCloserCell =
-				clampedCells[idx].hasHit &&
-				clampedCells[idx].distance < cells[idx].distance;
+				cells[idx].hasHit &&
+				cells[idx].clampedDistance < cells[idx].distance;
 
 			if (!isMissingDepthCell && !isClampedCloserCell) {
 				return;
@@ -445,17 +465,17 @@ static std::vector<CellData> smoothMissingDepthCells(
 			double maxAllowedDistance = std::numeric_limits<double>::infinity();
 
 			if (isMissingDepthCell) {
-				maxAllowedDistance = clampedCells[idx].distance;
+				maxAllowedDistance = cells[idx].clampedDistance;
 			}
 
 			for (uint neighborIdx : neighborsByCell[idx]) {
 				distanceSum += currentDistances[neighborIdx];
 				++distanceCount;
 
-				if (clampedCells[neighborIdx].hasHit &&
-					clampedCells[neighborIdx].distance != cells[neighborIdx].distance) {
+				if (cells[neighborIdx].hasHit &&
+					cells[neighborIdx].clampedDistance != cells[neighborIdx].distance) {
 					maxAllowedDistance =
-						std::min(maxAllowedDistance, clampedCells[neighborIdx].distance);
+						std::min(maxAllowedDistance, cells[neighborIdx].clampedDistance);
 				}
 			}
 

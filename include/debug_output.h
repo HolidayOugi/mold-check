@@ -23,7 +23,7 @@ static void addColoredPoint(
 }
 
 vcl::PolyMesh validateClampedCells(
-	const std::vector<CellData>& clampedCells,
+	const std::vector<CellData>& cells,
 	const std::vector<vcl::uint>& allCells,
 	const vcl::Point3d& direction,
 	double coneCosThreshold,
@@ -36,20 +36,20 @@ vcl::PolyMesh validateClampedCells(
 	violatingPointsMesh.enablePerVertexColor();
 
 	vcl::parallelFor(allCells, [&](uint i) {
-		//if (!clampedCells[i].hasHit) {
+		//if (!cells[i].hasHit) {
 		//	return;
 		//}
 
-		const Point3d& point = clampedCells[i].hitPoints[0];
+		const Point3d& point = cells[i].hitPoints[0];
 
-		for (uint j = 0; j < clampedCells.size(); ++j) {
-			//if (i == j || !clampedCells[j].hasHit) {
+		for (uint j = 0; j < cells.size(); ++j) {
+			//if (i == j || !cells[j].hasHit) {
 			if (i == j) {
 				continue;
 			}
 
 			const Point3d dirToOther =
-				clampedCells[j].hitPoints[0] - point;
+				cells[j].hitPoints[0] - point;
 
 			const double norm = dirToOther.norm();
 
@@ -93,7 +93,7 @@ static vcl::uint addFaceWithColor(
 }
 
 static vcl::TriMesh createMoldSurface(
-	const std::vector<CellData>& clampedCells,
+	const std::vector<CellData>& cells,
 	const GridChoice& grid,
 	const vcl::Point3d& direction)
 {
@@ -108,7 +108,7 @@ static vcl::TriMesh createMoldSurface(
 		for (uint col = 0; col < grid.cols; col += 1) {
 			const uint point = row * grid.cols + col;
 
-			const Point3d p = clampedCells[point].hitPoints[0];
+			const Point3d p = cells[point].hitPoints[0];
 
 			const uint v = tm.addVertex(p);
 
@@ -125,25 +125,25 @@ static vcl::TriMesh createMoldSurface(
 			const uint c11 = c01 + 1;
 
 
-			const std::array<const CellData*, 4> cells = {
-				&clampedCells[c00],
-				&clampedCells[c10],
-				&clampedCells[c01],
-				&clampedCells[c11]};
+			const std::array<const CellData*, 4> quadCells = {
+				&cells[c00],
+				&cells[c10],
+				&cells[c01],
+				&cells[c11]};
 
 
 			const double averageDistance =
-				(cells[0]->distance +
-				 cells[1]->distance +
-				 cells[2]->distance +
-				 cells[3]->distance) *
+				(quadCells[0]->distance +
+				 quadCells[1]->distance +
+				 quadCells[2]->distance +
+				 quadCells[3]->distance) *
 				0.25;
 
 			const Point3d foot =
-				(cells[0]->cellCenter +
-				 cells[1]->cellCenter +
-				 cells[2]->cellCenter +
-				 cells[3]->cellCenter) *
+				(quadCells[0]->cellCenter +
+				 quadCells[1]->cellCenter +
+				 quadCells[2]->cellCenter +
+				 quadCells[3]->cellCenter) *
 				0.25;
 
 			const Point3d medianPoint = foot + direction * averageDistance;

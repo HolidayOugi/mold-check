@@ -24,9 +24,11 @@ struct CellData
 {
 	std::array<vcl::Point3d, 4> cellCorners;
 	vcl::Point3d cellCenter;
-	double distance;
+	double distance = 0.0;
 	std::vector<vcl::Point3d> hitPoints;
 	bool hasHit = false;
+	bool hasClampedHit = false;
+	double clampedDistance = 0.0;
 };
 
 struct HitCellShapeData

@@ -57,10 +57,10 @@ static double moldQualityScore(
 	double percentHidden)
 {
 	return
-		0.30 * hitRatio +
+		0.40 * hitRatio +
 		0.30 * compactness +
-		0.20 * (1 - (percentHidden / 100.0)) +
-		0.20 * (1 - (percentClamped / 100.0));
+		0.15 * (1 - (percentHidden / 100.0)) +
+		0.15 * (1 - (percentClamped / 100.0));
 }
 
 MoldCheckMetrics moldCheck(
@@ -132,65 +132,48 @@ MoldCheckMetrics moldCheck(
 		cells[idx] = shootRayOnCell(cell, m, scene, planePoint, direction, MAX_DISTANCE, RAY_EPS);
 	});
 
-    std::vector<CellData> clampedCells = cells;
-
+	uint rawHitCount = 0;
         
 	if (debug) {
-            uint hitCount = 0;
 			for (uint i = 0; i < cells.size(); ++i) {
 				if (cells[i].hasHit) {
-                    ++hitCount;
+                    ++rawHitCount;
                 }
 			}
 			std::cout << "Ray casting complete. Hit cells: "
-					  << hitCount << "/" << allCells.size() << "\n";
+					  << rawHitCount << "/" << allCells.size() << "\n";
 			std::cout << "Beginning Clamping phase...\n";
 			std::cout.flush();
 	}
 
 
 	parallelFor(allCells, [&](uint idx) {
-		clampedCells[idx] = computeClampedCell(idx, cells, planePoint, direction, CONE_COS_THRESHOLD, EPS);
+		computeClampedCell(idx, cells, planePoint, direction, CONE_COS_THRESHOLD, EPS);
 	});
 
 	const double REDUCE_POINTS_DISTANCE_THRESHOLD =	0.03 * MAX_DISTANCE;
-	clampedCells = reducePoints(
-		clampedCells,
+	cells = reducePoints(
+		cells,
 		grid,
 		REDUCE_POINTS_DISTANCE_THRESHOLD);
 
-	if (debug) {
-		uint clampedHitCount = 0;
-		for (uint i = 0; i < clampedCells.size(); ++i) {
-			if (clampedCells[i].hasHit && cells[i].hasHit) {
-				++clampedHitCount;
-			}
-		}
-		std::cout << "Clamping complete. Hit cells after reduction: "
-				  << clampedHitCount << "/" << allCells.size() << "\n";
-		std::cout.flush();
-	}
 
 	double totalAreaHit = 0.0;
 	double clampedAreaHit = 0.0;
 	double hiddenAreaHit = 0.0;
-	uint rawHitCount = 0;
-	uint clampedHitCount = 0;
+	uint reducedHitCount = 0;
 
 	for (uint i = 0; i < cells.size(); ++i) {
 		if (cells[i].hasHit) {
-			++rawHitCount;
-		}
-		if (clampedCells[i].hasHit && cells[i].hasHit) {
-			++clampedHitCount;
+			++reducedHitCount;
 			totalAreaHit += cellArea;
 		}
 		if (cells[i].hasHit &&
-			clampedCells[i].hasHit &&
-			std::abs(clampedCells[i].distance - cells[i].distance) > EPS) {
+			cells[i].hasClampedHit &&
+			std::abs(cells[i].clampedDistance - cells[i].distance) > EPS) {
 			clampedAreaHit += cellArea;
 		}
-		if (clampedCells[i].hasHit && cells[i].hitPoints.size() > 2) {
+		if (cells[i].hasHit && cells[i].hitPoints.size() > 2) {
 			hiddenAreaHit += cellArea;
 		}
 	}
@@ -200,11 +183,11 @@ MoldCheckMetrics moldCheck(
 	const double percentHidden =
 		(totalAreaHit > 0.0) ? (hiddenAreaHit / totalAreaHit) * 100.0 : 0.0;
 
-	const HitCellShapeData hitShape = hitCellShape(clampedCells, grid);
+	const HitCellShapeData hitShape = hitCellShape(cells, grid);
 
 	const double hitRatio =
 		(cells.size() > 0) ?
-			static_cast<double>(clampedHitCount) / cells.size() :
+			static_cast<double>(reducedHitCount) / cells.size() :
 			0.0;
 
 	const MoldCheckMetrics metrics{
@@ -215,9 +198,15 @@ MoldCheckMetrics moldCheck(
 			percentHidden),
 		hitRatio,
 		hitShape.compactness,
-		clampedHitCount,
+		reducedHitCount,
 		percentClamped,
 		percentHidden};
+
+	if (debug) {
+		std::cout << "Clamping and reduction complete. Hit cells after reduction: "
+				  << reducedHitCount << "/" << allCells.size() << "\n";
+		std::cout.flush();
+	}
 
 	std::vector<CellData> depthCells = cells;
 
@@ -227,9 +216,8 @@ MoldCheckMetrics moldCheck(
 
 		depthCells =
 			smoothMissingDepthCells(
-				makeDepthCells(clampedCells, direction, grid),
+				makeDepthCells(cells, direction, grid),
 				cells,
-				clampedCells,
 				direction,
 				grid,
 				3,
@@ -241,12 +229,12 @@ MoldCheckMetrics moldCheck(
 		std::cout << "Depth smoothing complete.\n";
 		std::cout << "Fixing depth cell cone violations...\n";
 		std::cout.flush();
-		depthCells =
-			fixDepthCellConeViolations(
-				depthCells,
-				direction,
-				CONE_COS_THRESHOLD,
-				EPS);
+		//depthCells =
+		//	fixDepthCellConeViolations(
+		//		depthCells,
+		//		direction,
+		//		CONE_COS_THRESHOLD,
+		//		EPS);
 	}
 
 	
@@ -260,22 +248,31 @@ MoldCheckMetrics moldCheck(
 		PolyMesh hitPointsMesh;
 		hitPointsMesh.enablePerVertexColor();
 		for (uint i = 0; i < cells.size(); ++i) {
-			if (clampedCells[i].distance == MAX_DISTANCE || !cells[i].hasHit) continue;
-			addColoredPoint(hitPointsMesh, clampedCells[i].hitPoints[0], Color::Yellow);
+			if (cells[i].distance == MAX_DISTANCE) continue;
+			addColoredPoint(
+				hitPointsMesh,
+				cells[i].cellCenter + direction * cells[i].clampedDistance,
+				Color::Yellow);
 		}
 
 		PolyMesh hitPointsafterReductionMesh;
 		hitPointsafterReductionMesh.enablePerVertexColor();
 		for (uint i = 0; i < cells.size(); ++i) {
-			if (!clampedCells[i].hasHit || !cells[i].hasHit) continue;
-			addColoredPoint(hitPointsafterReductionMesh, clampedCells[i].hitPoints[0], Color::Blue);
+			if (!cells[i].hasHit) continue;
+			addColoredPoint(
+				hitPointsafterReductionMesh,
+				cells[i].cellCenter + direction * cells[i].clampedDistance,
+				Color::Blue);
 		}
 		
 		PolyMesh clampedPointsMesh;
 		clampedPointsMesh.enablePerVertexColor();
-		for (uint i = 0; i < clampedCells.size(); ++i) {
-			if (!clampedCells[i].hasHit) continue;
-			addColoredPoint(clampedPointsMesh, clampedCells[i].hitPoints[0], Color::Blue);
+		for (uint i = 0; i < cells.size(); ++i) {
+			if (!cells[i].hasClampedHit) continue;
+			addColoredPoint(
+				clampedPointsMesh,
+				cells[i].cellCenter + direction * cells[i].clampedDistance,
+				Color::Blue);
 		}
 
 		PolyMesh depthPointsMesh;
@@ -284,20 +281,13 @@ MoldCheckMetrics moldCheck(
 			const Point3d depthPoint =
 				depthCells[i].cellCenter + direction * depthCells[i].distance;
 			Color depthColor = Color::White;
-			if (cells[i].hasHit &&
-				clampedCells[i].hasHit &&
-				clampedCells[i].distance < cells[i].distance) {
-				depthColor = Color::Green;
-			}
-			else if (cells[i].hasHit &&
-				std::abs(depthCells[i].distance - cells[i].distance) <= EPS) {
-				depthColor = Color::Red;
-			}
-			else if (clampedCells[i].hasHit &&
-					 std::abs(
-						 depthCells[i].distance -
-						 clampedCells[i].distance) <= EPS) {
-				depthColor = Color::Green;
+			if (depthCells[i].hasHit) {
+				if (depthCells[i].hasClampedHit) {
+					depthColor = Color::Green;
+				}
+				else {
+					depthColor = Color::Red;
+				}
 			}
 			addColoredPoint(
 				depthPointsMesh,
@@ -347,8 +337,6 @@ MoldCheckMetrics moldCheck(
 				  << totalAreaHit << "\n";
 		std::cout << "RawHitCount: "
 				  << rawHitCount << "\n";
-		std::cout << "ClampedHitCount: "
-				  << clampedHitCount << "\n";
 		std::cout << "ClampedAreaHit: "
 				  << clampedAreaHit << "\n";
 		std::cout << "percentClamped: "
@@ -360,7 +348,7 @@ MoldCheckMetrics moldCheck(
 		std::cout << "hitRatio: "
 				  << hitRatio << "\n";
 		std::cout << "hitCount: "
-				  << clampedHitCount << "\n";
+				  << reducedHitCount << "\n";
 		std::cout << "qualityScore: "
 				  << metrics.score << "\n";
 		std::cout << "Saved debug meshes:\n"
