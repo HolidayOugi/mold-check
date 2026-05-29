@@ -588,30 +588,26 @@ static std::vector<CellData> makeDepthCellsPullPush(
 		return {};
 	}
 
-	struct PullPushLevel
-	{
-		uint rows = 0;
-		uint cols = 0;
-		std::vector<double> distances;
-		std::vector<double> weights;
-	};
-
 	std::vector<CellData> depthCells = cells;
 	std::vector<PullPushLevel> pyramid;
-	pyramid.push_back({
-		grid.rows,
-		grid.cols,
-		std::vector<double>(cells.size(), 0.0),
-		std::vector<double>(cells.size(), 0.0)});
+
+	PullPushLevel base;
+	base.rows = grid.rows;
+	base.cols = grid.cols;
+	base.distances.resize(cells.size(), 0.0);
+	base.weights.resize(cells.size(), 0.0);
 
 	uint hitCount = 0;
-	for (uint idx = 0; idx < depthCells.size(); ++idx) {
-		depthCells[idx].distance = cells[idx].clampedDistance;
-		depthCells[idx].hitPoints = {
-			depthCells[idx].cellCenter + direction * depthCells[idx].distance};
-		if (cells[idx].hasHit) {
-			pyramid[0].distances[idx] = depthCells[idx].distance;
-			pyramid[0].weights[idx] = 1.0;
+
+	for (uint i = 0; i < cells.size(); ++i) {
+		depthCells[i].distance = cells[i].clampedDistance;
+		depthCells[i].hitPoints = {
+			depthCells[i].cellCenter + direction * depthCells[i].distance
+		};
+
+		if (cells[i].hasHit) {
+			base.distances[i] = cells[i].clampedDistance;
+			base.weights[i] = 1.0;
 			++hitCount;
 		}
 	}
@@ -620,19 +616,19 @@ static std::vector<CellData> makeDepthCellsPullPush(
 		return cells;
 	}
 
+	pyramid.push_back(std::move(base));
+
 	while (pyramid.back().rows > 1 || pyramid.back().cols > 1) {
 		const PullPushLevel& fine = pyramid.back();
-		const uint coarseRows = (fine.rows + 1) / 2;
-		const uint coarseCols = (fine.cols + 1) / 2;
 
-		PullPushLevel coarse{
-			coarseRows,
-			coarseCols,
-			std::vector<double>(coarseRows * coarseCols, 0.0),
-			std::vector<double>(coarseRows * coarseCols, 0.0)};
+		PullPushLevel coarse;
+		coarse.rows = (fine.rows + 1) / 2;
+		coarse.cols = (fine.cols + 1) / 2;
+		coarse.distances.resize(coarse.rows * coarse.cols, 0.0);
+		coarse.weights.resize(coarse.rows * coarse.cols, 0.0);
 
-		for (uint row = 0; row < coarseRows; ++row) {
-			for (uint col = 0; col < coarseCols; ++col) {
+		for (uint row = 0; row < coarse.rows; ++row) {
+			for (uint col = 0; col < coarse.cols; ++col) {
 				double weightedDistanceSum = 0.0;
 				double weightSum = 0.0;
 
@@ -645,22 +641,24 @@ static std::vector<CellData> makeDepthCellsPullPush(
 							continue;
 						}
 
-						const uint fineIdx = fineRow * fine.cols + fineCol;
-						const double weight = fine.weights[fineIdx];
+						const uint fineIndex = fineRow * fine.cols + fineCol;
+						const double weight = fine.weights[fineIndex];
 
 						if (weight <= 0.0) {
 							continue;
 						}
 
-						weightedDistanceSum += fine.distances[fineIdx] * weight;
+						weightedDistanceSum += fine.distances[fineIndex] * weight;
 						weightSum += weight;
 					}
 				}
 
-				const uint coarseIdx = row * coarseCols + col;
+				const uint coarseIndex = row * coarse.cols + col;
+
 				if (weightSum > 0.0) {
-					coarse.distances[coarseIdx] = weightedDistanceSum / weightSum;
-					coarse.weights[coarseIdx] = weightSum;
+					coarse.distances[coarseIndex] =
+						weightedDistanceSum / weightSum;
+					coarse.weights[coarseIndex] = weightSum;
 				}
 			}
 		}
@@ -668,115 +666,76 @@ static std::vector<CellData> makeDepthCellsPullPush(
 		pyramid.push_back(std::move(coarse));
 	}
 
-	for (uint levelIdx = static_cast<uint>(pyramid.size() - 1);
-		 levelIdx > 0;
-		 --levelIdx) {
-		const PullPushLevel& coarse = pyramid[levelIdx];
-		PullPushLevel& fine = pyramid[levelIdx - 1];
+	for (uint level = static_cast<uint>(pyramid.size() - 1);
+		 level > 0;
+		 --level) {
+		const PullPushLevel& coarse = pyramid[level];
+		PullPushLevel& fine = pyramid[level - 1];
 
 		for (uint row = 0; row < fine.rows; ++row) {
 			for (uint col = 0; col < fine.cols; ++col) {
-				const uint idx = row * fine.cols + col;
+				const uint index = row * fine.cols + col;
 
-				if (levelIdx == 1) {
-					if (cells[idx].hasHit && !cells[idx].hasClampedHit) {
-						fine.distances[idx] = cells[idx].clampedDistance;
-						fine.weights[idx] = 1.0;
-						continue;
-					}
-				}
-				else if (fine.weights[idx] > 0.0) {
+				if (level == 1 && cells[index].hasHit && !cells[index].hasClampedHit) {
+					fine.distances[index] = cells[index].clampedDistance;
+					fine.weights[index] = 1.0;
 					continue;
 				}
 
-				const double coarseRow =
-					(static_cast<double>(row) + 0.5) *
-					static_cast<double>(coarse.rows) /
-					static_cast<double>(fine.rows) - 0.5;
-				const double coarseCol =
-					(static_cast<double>(col) + 0.5) *
-					static_cast<double>(coarse.cols) /
-					static_cast<double>(fine.cols) - 0.5;
-				const int row0 = static_cast<int>(std::floor(coarseRow));
-				const int col0 = static_cast<int>(std::floor(coarseCol));
-				double weightedDistanceSum = 0.0;
-				double weightSum = 0.0;
-
-				for (int rowOffset = 0; rowOffset <= 1; ++rowOffset) {
-					for (int colOffset = 0; colOffset <= 1; ++colOffset) {
-						const int sampleRow = row0 + rowOffset;
-						const int sampleCol = col0 + colOffset;
-
-						if (sampleRow < 0 ||
-							sampleCol < 0 ||
-							sampleRow >= static_cast<int>(coarse.rows) ||
-							sampleCol >= static_cast<int>(coarse.cols)) {
-							continue;
-						}
-
-						const uint sampleIdx =
-							static_cast<uint>(sampleRow) * coarse.cols +
-							static_cast<uint>(sampleCol);
-						const double interpolationWeight =
-							std::max(
-								0.0,
-								1.0 - std::abs(coarseRow - sampleRow)) *
-							std::max(
-								0.0,
-								1.0 - std::abs(coarseCol - sampleCol));
-						const double weight =
-							interpolationWeight * coarse.weights[sampleIdx];
-
-						weightedDistanceSum += coarse.distances[sampleIdx] * weight;
-						weightSum += weight;
-					}
+				if (level > 1 && fine.weights[index] > 0.0) {
+					continue;
 				}
 
-				if (weightSum > 0.0) {
-					fine.distances[idx] = weightedDistanceSum / weightSum;
-				}
-				else {
-					const uint parentRow = std::min(row / 2, coarse.rows - 1);
-					const uint parentCol = std::min(col / 2, coarse.cols - 1);
-					fine.distances[idx] =
-						coarse.distances[parentRow * coarse.cols + parentCol];
+				fine.distances[index] =
+					interpolateFromCoarseLevel(
+						coarse,
+						row,
+						col,
+						fine.rows,
+						fine.cols);
+
+				if (level == 1 && cells[index].hasClampedHit) {
+					fine.distances[index] =
+						std::min(fine.distances[index], cells[index].clampedDistance);
 				}
 
-				if (levelIdx == 1 && cells[idx].hasClampedHit) {
-					fine.distances[idx] =
-						std::min(fine.distances[idx], cells[idx].clampedDistance);
-				}
-				fine.weights[idx] = 1.0;
+				fine.weights[index] = 1.0;
 			}
 		}
 	}
 
-	for (uint idx = 0; idx < depthCells.size(); ++idx) {
-		depthCells[idx].distance = pyramid[0].distances[idx];
-		if (cells[idx].hasClampedHit) {
-			depthCells[idx].distance =
-				std::min(depthCells[idx].distance, cells[idx].clampedDistance);
+	for (uint i = 0; i < depthCells.size(); ++i) {
+		depthCells[i].distance = pyramid[0].distances[i];
+
+		if (cells[i].hasClampedHit) {
+			depthCells[i].distance =
+				std::min(depthCells[i].distance, cells[i].clampedDistance);
 		}
-		depthCells[idx].hitPoints = {
-			depthCells[idx].cellCenter + direction * depthCells[idx].distance};
-		depthCells[idx].hasHit = cells[idx].hasHit;
+
+		depthCells[i].hitPoints = {
+			depthCells[i].cellCenter + direction * depthCells[i].distance
+		};
+
+		depthCells[i].hasHit = cells[i].hasHit;
 	}
 
-	depthCells =
-		fixDepthCellConeViolations(
-			depthCells,
-			direction,
-			coneCosThreshold,
-			eps);
+	depthCells = fixDepthCellConeViolations(
+		depthCells,
+		direction,
+		coneCosThreshold,
+		eps);
 
-	for (uint idx = 0; idx < depthCells.size(); ++idx) {
-		if (depthCells[idx].hasClampedHit) {
-			depthCells[idx].distance =
-				std::min(depthCells[idx].distance, depthCells[idx].clampedDistance);
+	for (uint i = 0; i < depthCells.size(); ++i) {
+		if (depthCells[i].hasClampedHit) {
+			depthCells[i].distance =
+				std::min(depthCells[i].distance, depthCells[i].clampedDistance);
 		}
-		depthCells[idx].hitPoints = {
-			depthCells[idx].cellCenter + direction * depthCells[idx].distance};
-		depthCells[idx].hasHit = cells[idx].hasHit;
+
+		depthCells[i].hitPoints = {
+			depthCells[i].cellCenter + direction * depthCells[i].distance
+		};
+
+		depthCells[i].hasHit = cells[i].hasHit;
 	}
 
 	return depthCells;

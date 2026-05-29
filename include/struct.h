@@ -38,4 +38,12 @@ struct HitCellShapeData
 	double compactness = 0.0;
 };
 
+struct PullPushLevel
+{
+	uint rows = 0;
+	uint cols = 0;
+	std::vector<double> distances;
+	std::vector<double> weights;
+};
+
 #endif
