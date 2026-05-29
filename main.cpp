@@ -225,7 +225,7 @@ MoldCheckMetrics moldCheck(
 		*/
 
 		depthCells =
-			makeDepthCellsPullPush(
+			makeDepthCells(
 				cells,
 				direction,
 				grid,
@@ -235,7 +235,6 @@ MoldCheckMetrics moldCheck(
 
 	if (debug) {
 		std::cout << "Depth smoothing complete.\n";
-		std::cout << "Fixing depth cell cone violations...\n";
 		std::cout.flush();
 		//depthCells =
 		//	fixDepthCellConeViolations(

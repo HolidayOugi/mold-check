@@ -296,7 +296,9 @@ static void computeClampedCell(
 static std::vector<CellData> makeDepthCells(
 	const std::vector<CellData>& cells,
 	const vcl::Point3d& direction,
-	const GridChoice& grid)
+	const GridChoice& grid,
+	double coneCosThreshold,
+	float eps)
 {
 	if (cells.size() != grid.rows * grid.cols) {
 		return {};
@@ -575,20 +577,12 @@ static std::vector<CellData> fixDepthCellConeViolations(
 	return depthCells;
 }
 
-static std::vector<CellData> makeDepthCellsPullPush(
+static std::vector<double> pushPull(
 	const std::vector<CellData>& cells,
-	const vcl::Point3d& direction,
-	const GridChoice& grid,
-	double coneCosThreshold,
-	float eps)
+	const GridChoice& grid)
 {
 	using namespace vcl;
 
-	if (cells.size() != grid.rows * grid.cols) {
-		return {};
-	}
-
-	std::vector<CellData> depthCells = cells;
 	std::vector<PullPushLevel> pyramid;
 
 	PullPushLevel base;
@@ -597,23 +591,23 @@ static std::vector<CellData> makeDepthCellsPullPush(
 	base.distances.resize(cells.size(), 0.0);
 	base.weights.resize(cells.size(), 0.0);
 
-	uint hitCount = 0;
+	std::vector<uint> baseIndices(cells.size());
+	std::iota(baseIndices.begin(), baseIndices.end(), 0);
 
-	for (uint i = 0; i < cells.size(); ++i) {
-		depthCells[i].distance = cells[i].clampedDistance;
-		depthCells[i].hitPoints = {
-			depthCells[i].cellCenter + direction * depthCells[i].distance
-		};
-
+	parallelFor(baseIndices, [&](uint i) {
 		if (cells[i].hasHit) {
 			base.distances[i] = cells[i].clampedDistance;
 			base.weights[i] = 1.0;
-			++hitCount;
 		}
-	}
+	});
+
+	const uint hitCount = static_cast<uint>(
+		std::count_if(cells.begin(), cells.end(), [](const CellData& cell) {
+			return cell.hasHit;
+		}));
 
 	if (hitCount == 0) {
-		return cells;
+		return base.distances;
 	}
 
 	pyramid.push_back(std::move(base));
@@ -627,41 +621,42 @@ static std::vector<CellData> makeDepthCellsPullPush(
 		coarse.distances.resize(coarse.rows * coarse.cols, 0.0);
 		coarse.weights.resize(coarse.rows * coarse.cols, 0.0);
 
-		for (uint row = 0; row < coarse.rows; ++row) {
-			for (uint col = 0; col < coarse.cols; ++col) {
-				double weightedDistanceSum = 0.0;
-				double weightSum = 0.0;
+		std::vector<uint> coarseIndices(coarse.rows * coarse.cols);
+		std::iota(coarseIndices.begin(), coarseIndices.end(), 0);
 
-				for (uint rowOffset = 0; rowOffset < 2; ++rowOffset) {
-					for (uint colOffset = 0; colOffset < 2; ++colOffset) {
-						const uint fineRow = row * 2 + rowOffset;
-						const uint fineCol = col * 2 + colOffset;
+		parallelFor(coarseIndices, [&](uint coarseIndex) {
+			const uint row = coarseIndex / coarse.cols;
+			const uint col = coarseIndex % coarse.cols;
+			double weightedDistanceSum = 0.0;
+			double weightSum = 0.0;
 
-						if (fineRow >= fine.rows || fineCol >= fine.cols) {
-							continue;
-						}
+			for (uint rowOffset = 0; rowOffset < 2; ++rowOffset) {
+				for (uint colOffset = 0; colOffset < 2; ++colOffset) {
+					const uint fineRow = row * 2 + rowOffset;
+					const uint fineCol = col * 2 + colOffset;
 
-						const uint fineIndex = fineRow * fine.cols + fineCol;
-						const double weight = fine.weights[fineIndex];
-
-						if (weight <= 0.0) {
-							continue;
-						}
-
-						weightedDistanceSum += fine.distances[fineIndex] * weight;
-						weightSum += weight;
+					if (fineRow >= fine.rows || fineCol >= fine.cols) {
+						continue;
 					}
-				}
 
-				const uint coarseIndex = row * coarse.cols + col;
+					const uint fineIndex = fineRow * fine.cols + fineCol;
+					const double weight = fine.weights[fineIndex];
 
-				if (weightSum > 0.0) {
-					coarse.distances[coarseIndex] =
-						weightedDistanceSum / weightSum;
-					coarse.weights[coarseIndex] = weightSum;
+					if (weight <= 0.0) {
+						continue;
+					}
+
+					weightedDistanceSum += fine.distances[fineIndex] * weight;
+					weightSum += weight;
 				}
 			}
-		}
+
+			if (weightSum > 0.0) {
+				coarse.distances[coarseIndex] =
+					weightedDistanceSum / weightSum;
+				coarse.weights[coarseIndex] = weightSum;
+			}
+		});
 
 		pyramid.push_back(std::move(coarse));
 	}
@@ -672,40 +667,142 @@ static std::vector<CellData> makeDepthCellsPullPush(
 		const PullPushLevel& coarse = pyramid[level];
 		PullPushLevel& fine = pyramid[level - 1];
 
-		for (uint row = 0; row < fine.rows; ++row) {
-			for (uint col = 0; col < fine.cols; ++col) {
-				const uint index = row * fine.cols + col;
+		std::vector<uint> fineIndices(fine.rows * fine.cols);
+		std::iota(fineIndices.begin(), fineIndices.end(), 0);
 
-				if (level == 1 && cells[index].hasHit && !cells[index].hasClampedHit) {
-					fine.distances[index] = cells[index].clampedDistance;
-					fine.weights[index] = 1.0;
-					continue;
-				}
+		parallelFor(fineIndices, [&](uint index) {
+			const uint row = index / fine.cols;
+			const uint col = index % fine.cols;
 
-				if (level > 1 && fine.weights[index] > 0.0) {
-					continue;
-				}
-
-				fine.distances[index] =
-					interpolateFromCoarseLevel(
-						coarse,
-						row,
-						col,
-						fine.rows,
-						fine.cols);
-
-				if (level == 1 && cells[index].hasClampedHit) {
-					fine.distances[index] =
-						std::min(fine.distances[index], cells[index].clampedDistance);
-				}
-
+			if (level == 1 && cells[index].hasHit && !cells[index].hasClampedHit) {
+				fine.distances[index] = cells[index].clampedDistance;
 				fine.weights[index] = 1.0;
+				return;
 			}
+
+			if (level > 1 && fine.weights[index] > 0.0) {
+				return;
+			}
+
+			fine.distances[index] =
+				interpolateFromCoarseLevel(
+					coarse,
+					row,
+					col,
+					fine.rows,
+					fine.cols);
+
+			if (level == 1 && cells[index].hasClampedHit) {
+				fine.distances[index] =
+					std::min(fine.distances[index], cells[index].clampedDistance);
+			}
+
+			fine.weights[index] = 1.0;
+		});
+	}
+
+	return pyramid[0].distances;
+}
+
+static std::vector<CellData> successiveOverRelaxation(
+	std::vector<CellData> depthCells,
+	const std::vector<CellData>& cells,
+	const vcl::Point3d& direction,
+	const GridChoice& grid,
+	vcl::uint maxIterations,
+	double omega,
+	double eps)
+{
+	using namespace vcl;
+
+	if (depthCells.size() != cells.size() ||
+		depthCells.size() != grid.rows * grid.cols ||
+		omega <= 0.0 ||
+		omega >= 2.0) {
+		return depthCells;
+	}
+
+	std::vector<uint> allCells(depthCells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+	std::vector<double> changes(depthCells.size(), 0.0);
+
+	for (uint iteration = 0; iteration < maxIterations; ++iteration) {
+		std::fill(changes.begin(), changes.end(), 0.0);
+
+		for (uint color = 0; color < 2; ++color) {
+			parallelFor(allCells, [&](uint idx) {
+				if (cells[idx].hasHit) {
+					return;
+				}
+
+				const uint row = idx / grid.cols;
+				const uint col = idx % grid.cols;
+				if ((row + col) % 2 != color) {
+					return;
+				}
+
+				const std::vector<uint> neighbors = crossNeighborIndices(idx, grid);
+				if (neighbors.empty()) {
+					return;
+				}
+
+				double neighborDistanceSum = 0.0;
+				for (uint neighborIdx : neighbors) {
+					neighborDistanceSum += depthCells[neighborIdx].distance;
+				}
+
+				const double gaussSeidelDistance =
+					neighborDistanceSum / static_cast<double>(neighbors.size());
+				const double oldDistance = depthCells[idx].distance;
+				const double relaxedDistance =
+					(1.0 - omega) * oldDistance +
+					omega * gaussSeidelDistance;
+
+				depthCells[idx].distance = relaxedDistance;
+				changes[idx] = std::abs(relaxedDistance - oldDistance);
+			});
+		}
+
+		const double maxChange =
+			*std::max_element(changes.begin(), changes.end());
+		if (maxChange < eps) {
+			break;
 		}
 	}
 
+	parallelFor(allCells, [&](uint i) {
+		depthCells[i].hitPoints = {
+			depthCells[i].cellCenter + direction * depthCells[i].distance};
+	});
+
+	return depthCells;
+}
+
+static std::vector<CellData> makeDepthCells(
+	const std::vector<CellData>& cells,
+	const vcl::Point3d& direction,
+	const GridChoice& grid,
+	double coneCosThreshold,
+	float eps)
+{
+	using namespace vcl;
+
+	if (cells.size() != grid.rows * grid.cols) {
+		return {};
+	}
+
+	std::vector<CellData> depthCells = cells;
+
+	if (std::none_of(cells.begin(), cells.end(), [](const CellData& cell) {
+			return cell.hasHit;
+		})) {
+		return depthCells;
+	}
+
+	const std::vector<double> distances = pushPull(cells, grid);
+
 	for (uint i = 0; i < depthCells.size(); ++i) {
-		depthCells[i].distance = pyramid[0].distances[i];
+		depthCells[i].distance = distances[i];
 
 		if (cells[i].hasClampedHit) {
 			depthCells[i].distance =
@@ -715,28 +812,23 @@ static std::vector<CellData> makeDepthCellsPullPush(
 		depthCells[i].hitPoints = {
 			depthCells[i].cellCenter + direction * depthCells[i].distance
 		};
-
 		depthCells[i].hasHit = cells[i].hasHit;
 	}
+
+	depthCells = successiveOverRelaxation(
+		depthCells,
+		cells,
+		direction,
+		grid,
+		1000,
+		1.6,
+		eps);
 
 	depthCells = fixDepthCellConeViolations(
 		depthCells,
 		direction,
 		coneCosThreshold,
 		eps);
-
-	for (uint i = 0; i < depthCells.size(); ++i) {
-		if (depthCells[i].hasClampedHit) {
-			depthCells[i].distance =
-				std::min(depthCells[i].distance, depthCells[i].clampedDistance);
-		}
-
-		depthCells[i].hitPoints = {
-			depthCells[i].cellCenter + direction * depthCells[i].distance
-		};
-
-		depthCells[i].hasHit = cells[i].hasHit;
-	}
 
 	return depthCells;
 }
