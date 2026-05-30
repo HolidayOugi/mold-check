@@ -362,6 +362,78 @@ static std::vector<CellData> makeDepthCells(
 
 */
 
+static std::vector<CellData> keepClampedCellsConnectedToCandidates(
+	std::vector<CellData> cells,
+	const std::vector<CellData>& candidateCells,
+	const GridChoice& grid,
+	double distanceThreshold)
+{
+	using namespace vcl;
+
+	std::vector<uint> allCells(cells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+	std::vector<char> keepCells(cells.size(), false);
+	std::vector<uint> stack;
+
+	parallelFor(allCells, [&](uint idx) {
+		if (candidateCells[idx].hasHit) {
+			keepCells[idx] = true;
+		}
+	});
+
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		if (keepCells[idx]) {
+			stack.push_back(idx);
+		}
+	}
+
+	while (!stack.empty()) {
+		const uint idx = stack.back();
+		stack.pop_back();
+
+		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
+			if (keepCells[neighborIdx]) {
+				continue;
+			}
+
+			const bool canKeep =
+				candidateCells[neighborIdx].hasHit ||
+				(cells[neighborIdx].hasHit &&
+				 cells[neighborIdx].hasClampedHit);
+
+			if (!canKeep) {
+				continue;
+			}
+
+			keepCells[neighborIdx] = true;
+			stack.push_back(neighborIdx);
+		}
+	}
+
+	std::vector<CellData> filteredCells = cells;
+	parallelFor(allCells, [&](uint idx) {
+		filteredCells[idx].hasHit = keepCells[idx];
+	});
+
+	const std::vector<std::vector<uint>> filteredConnectedNeighbors =
+		removeDistanceJumpPoints(
+			filteredCells,
+			grid,
+			distanceThreshold);
+
+	filteredCells =
+		keepLargestHitComponent(filteredCells, filteredConnectedNeighbors);
+
+	parallelFor(allCells, [&](uint idx) {
+		if (!filteredCells[idx].hasHit) {
+			cells[idx].hasHit = false;
+			cells[idx].hasClampedHit = false;
+		}
+	});
+
+	return cells;
+}
+
 static std::vector<CellData> reducePoints(
 	std::vector<CellData> cells,
 	const GridChoice& grid,
@@ -373,12 +445,13 @@ static std::vector<CellData> reducePoints(
 		return cells;
 	}
 
+	std::vector<uint> allCells(cells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
 	std::vector<CellData> candidateCells = cells;
-	for (CellData& cell : candidateCells) {
-		if (cell.hasClampedHit) {
-			cell.hasHit = false;
-		}
-	}
+	parallelFor(allCells, [&](uint idx) {
+		candidateCells[idx].hasHit =
+			cells[idx].hasHit && !cells[idx].hasClampedHit;
+	});
 
 	erodeHitMaskOnce(candidateCells, grid);
 	erodeHitMaskOnce(candidateCells, grid);
@@ -393,13 +466,11 @@ static std::vector<CellData> reducePoints(
 
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
-	for (uint idx = 0; idx < cells.size(); ++idx) {
-		if (!cells[idx].hasClampedHit) {
-			cells[idx].hasHit = cells[idx].hasHit && candidateCells[idx].hasHit;
-		}
-	}
-
-	return cells;
+	return keepClampedCellsConnectedToCandidates(
+		cells,
+		candidateCells,
+		grid,
+		distanceThreshold);
 }
 
 /*

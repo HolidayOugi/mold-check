@@ -6,9 +6,11 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <unordered_set>
 #include <vector>
 
+#include <vclib/base/parallel.h>
 #include <vclib/meshes.h>
 
 static vcl::Point3d computeHitPoint(
@@ -314,11 +316,13 @@ static void erodeHitMaskOnce(
 {
 	using namespace vcl;
 
-	std::vector<bool> nextHasHit(cells.size(), false);
+	std::vector<uint> allCells(cells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+	std::vector<char> nextHasHit(cells.size(), false);
 
-	for (uint idx = 0; idx < cells.size(); ++idx) {
+	parallelFor(allCells, [&](uint idx) {
 		if (!cells[idx].hasHit) {
-			continue;
+			return;
 		}
 
 		bool keep = true;
@@ -330,11 +334,11 @@ static void erodeHitMaskOnce(
 		}
 
 		nextHasHit[idx] = keep;
-	}
+	});
 
-	for (uint idx = 0; idx < cells.size(); ++idx) {
+	parallelFor(allCells, [&](uint idx) {
 		cells[idx].hasHit = nextHasHit[idx];
-	}
+	});
 }
 
 static void dilateHitMaskOnce(
@@ -343,9 +347,11 @@ static void dilateHitMaskOnce(
 {
 	using namespace vcl;
 
-	std::vector<bool> nextHasHit(cells.size(), false);
+	std::vector<uint> allCells(cells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+	std::vector<char> nextHasHit(cells.size(), false);
 
-	for (uint idx = 0; idx < cells.size(); ++idx) {
+	parallelFor(allCells, [&](uint idx) {
 		bool add = cells[idx].hasHit;
 		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
 			if (cells[neighborIdx].hasHit) {
@@ -355,11 +361,11 @@ static void dilateHitMaskOnce(
 		}
 
 		nextHasHit[idx] = add;
-	}
+	});
 
-	for (uint idx = 0; idx < cells.size(); ++idx) {
+	parallelFor(allCells, [&](uint idx) {
 		cells[idx].hasHit = nextHasHit[idx];
-	}
+	});
 }
 
 static std::vector<std::vector<vcl::uint>> removeDistanceJumpPoints(

@@ -151,7 +151,12 @@ MoldCheckMetrics moldCheck(
 		computeClampedCell(idx, cells, planePoint, direction, CONE_COS_THRESHOLD, EPS);
 	});
 
-	const double REDUCE_POINTS_DISTANCE_THRESHOLD =	0.02 * MAX_DISTANCE;
+	const double REDUCE_POINTS_REFERENCE_CELL_SIDE = 0.4;
+	const double reducePointsCellScale =
+		((grid.sideU + grid.sideV) * 0.5) /
+		REDUCE_POINTS_REFERENCE_CELL_SIDE;
+	const double REDUCE_POINTS_DISTANCE_THRESHOLD =
+		0.02 * MAX_DISTANCE * reducePointsCellScale;
 	cells = reducePoints(
 		cells,
 		grid,
@@ -388,7 +393,7 @@ int main()
     PolyMesh m = loadMesh<PolyMesh>(MESHES_PATH "/bimba_enlarged.ply");
 
 
-    std::vector<double> gridCellSideLengths = {0.4, 0.4};
+    std::vector<double> gridCellSideLengths = {0.2, 0.2};
 
 	const double coneAngleDegrees = 5.0;
 
