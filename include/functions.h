@@ -731,7 +731,7 @@ static std::vector<CellData> successiveOverRelaxation(
 
 		for (uint color = 0; color < 2; ++color) {
 			parallelFor(allCells, [&](uint idx) {
-				if (cells[idx].hasHit) {
+				if (cells[idx].hasHit && !cells[idx].hasClampedHit) {
 					return;
 				}
 
@@ -778,6 +778,124 @@ static std::vector<CellData> successiveOverRelaxation(
 	return depthCells;
 }
 
+static std::vector<CellData> smoothMeshEdges(
+	std::vector<CellData> depthCells,
+	const vcl::Point3d& direction,
+	const GridChoice& grid)
+{
+	using namespace vcl;
+
+	if (depthCells.size() != grid.rows * grid.cols) {
+		return depthCells;
+	}
+
+	const std::vector<CellData> originalDepthCells = depthCells;
+	std::vector<uint> allCells(depthCells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+
+	parallelFor(allCells, [&](uint idx) {
+		if (!originalDepthCells[idx].hasHit) {
+			return;
+		}
+
+		double clampedDistance = originalDepthCells[idx].distance;
+		bool shouldClamp = false;
+
+		for (uint neighborIdx : squareNeighborIndices(idx, grid, 3)) {
+			if (originalDepthCells[neighborIdx].hasHit) {
+				continue;
+			}
+
+			if (clampedDistance > originalDepthCells[neighborIdx].distance) {
+				clampedDistance = originalDepthCells[neighborIdx].distance;
+				shouldClamp = true;
+			}
+		}
+
+		if (!shouldClamp) {
+			return;
+		}
+
+		depthCells[idx].distance = clampedDistance;
+		depthCells[idx].clampedDistance = clampedDistance;
+		depthCells[idx].hitPoints = {
+			depthCells[idx].cellCenter + direction * clampedDistance};
+		depthCells[idx].hasClampedHit = true;
+	});
+
+	return depthCells;
+}
+
+static std::vector<CellData> smoothMeshPits(
+	std::vector<CellData> depthCells,
+	const vcl::Point3d& direction,
+	const GridChoice& grid)
+{
+	using namespace vcl;
+
+	if (depthCells.size() != grid.rows * grid.cols) {
+		return depthCells;
+	}
+
+	const std::vector<CellData> originalDepthCells = depthCells;
+	std::vector<uint> allCells(depthCells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+
+	parallelFor(allCells, [&](uint idx) {
+		if (!originalDepthCells[idx].hasHit ||
+			originalDepthCells[idx].hasClampedHit) {
+			return;
+		}
+
+		const std::vector<uint> neighbors =
+			squareNeighborIndices(idx, grid, 3);
+
+		if (neighbors.empty()) {
+			return;
+		}
+
+		uint pitNeighborCount = 0;
+		double maxClampedDistance =
+			-std::numeric_limits<double>::infinity();
+
+		for (uint neighborIdx : neighbors) {
+			if (!originalDepthCells[neighborIdx].hasHit ||
+				originalDepthCells[neighborIdx].hasClampedHit) {
+				++pitNeighborCount;
+			}
+
+			if (!originalDepthCells[neighborIdx].hasClampedHit) {
+				continue;
+			}
+
+			maxClampedDistance =
+				std::max(
+					maxClampedDistance,
+					originalDepthCells[neighborIdx].distance);
+		}
+
+		const bool hasClampedNeighbor =
+			maxClampedDistance > -std::numeric_limits<double>::infinity();
+
+		const bool mostlySurroundedByPitNeighbors =
+			pitNeighborCount + 1 > neighbors.size() / 2;
+
+		if (!hasClampedNeighbor ||
+			!mostlySurroundedByPitNeighbors ||
+			originalDepthCells[idx].distance <= maxClampedDistance) {
+			return;
+		}
+
+		depthCells[idx].distance = maxClampedDistance;
+		depthCells[idx].clampedDistance = maxClampedDistance;
+		depthCells[idx].hitPoints = {
+			depthCells[idx].cellCenter + direction * maxClampedDistance};
+		depthCells[idx].hasClampedHit = true;
+	});
+
+	return depthCells;
+}
+
 static std::vector<CellData> makeDepthCells(
 	const std::vector<CellData>& cells,
 	const vcl::Point3d& direction,
@@ -815,20 +933,18 @@ static std::vector<CellData> makeDepthCells(
 		depthCells[i].hasHit = cells[i].hasHit;
 	}
 
-	depthCells = successiveOverRelaxation(
-		depthCells,
-		cells,
-		direction,
-		grid,
-		1000,
-		1.6,
-		eps);
+	depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
 
-	depthCells = fixDepthCellConeViolations(
-		depthCells,
-		direction,
-		coneCosThreshold,
-		eps);
+	for (uint i = 0; i < 3; ++i) {
+
+		depthCells = smoothMeshEdges(depthCells, direction, grid);
+		
+		depthCells = smoothMeshPits(depthCells, direction, grid);
+
+		depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
+	}
+
+	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 
 	return depthCells;
 }

@@ -269,6 +269,45 @@ static std::vector<vcl::uint> crossNeighborIndices(
 	return neighbors;
 }
 
+static std::vector<vcl::uint> squareNeighborIndices(
+	vcl::uint idx,
+	const GridChoice& grid,
+	vcl::uint squareSize)
+{
+	using namespace vcl;
+
+	const uint centerRow = idx / grid.cols;
+	const uint centerCol = idx % grid.cols;
+	const int radius = static_cast<int>(squareSize / 2);
+
+	std::vector<uint> neighbors;
+	neighbors.reserve(squareSize * squareSize - 1);
+
+	for (int rowOffset = -radius; rowOffset <= radius; ++rowOffset) {
+		for (int colOffset = -radius; colOffset <= radius; ++colOffset) {
+			if (rowOffset == 0 && colOffset == 0) {
+				continue;
+			}
+
+			const int row = static_cast<int>(centerRow) + rowOffset;
+			const int col = static_cast<int>(centerCol) + colOffset;
+
+			if (row < 0 ||
+				col < 0 ||
+				row >= static_cast<int>(grid.rows) ||
+				col >= static_cast<int>(grid.cols)) {
+				continue;
+			}
+
+			neighbors.push_back(
+				static_cast<uint>(row) * grid.cols +
+				static_cast<uint>(col));
+		}
+	}
+
+	return neighbors;
+}
+
 static void erodeHitMaskOnce(
 	std::vector<CellData>& cells,
 	const GridChoice& grid)

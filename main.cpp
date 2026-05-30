@@ -325,11 +325,11 @@ MoldCheckMetrics moldCheck(
 			(debugOutputDir / "mold_check").string();
 		saveMesh(hitPointsMesh, base + "_hit_points.ply");
 		saveMesh(hitPointsafterReductionMesh, base + "_hit_points_after_reduction.ply");
-		saveMesh(clampedPointsMesh, base + "_all_clamped_points.ply");
-		saveMesh(depthPointsMesh, base + "_depth_points.ply");
-		saveMesh(planeMesh, base + "_plane.ply");
+		saveMesh(clampedPointsMesh, base + "_lipschitz_points.ply");
+		saveMesh(depthPointsMesh, base + "_mold_points.ply");
+		saveMesh(planeMesh, base + "_plane_tested.ply");
 		saveMesh(moldSurfaceMesh, base + "_mold_surface.ply");
-		saveMesh(violatingPointsMesh, base + "_violating_points.ply");
+		saveMesh(violatingPointsMesh, base + "_non-lipschitz_points.ply");
 		
 		std::cout << "Clamped points: " << clampedPointsMesh.vertexCount() << "\n";
 		std::cout << "Depth points: " << depthPointsMesh.vertexCount() << "\n";
@@ -361,11 +361,11 @@ MoldCheckMetrics moldCheck(
 		std::cout << "Saved debug meshes:\n"
 				<< " - " << base << "_hit_points.ply\n"
 				<< " - " << base << "_hit_points_after_reduction.ply\n"
-				<< " - " << base << "_all_clamped_points.ply\n"
-				<< " - " << base << "_depth_points.ply\n"
-				<< " - " << base << "_plane.ply\n"
+				<< " - " << base << "_lipschitz_points.ply\n"
+				<< " - " << base << "_mold_points.ply\n"
+				<< " - " << base << "_plane_tested.ply\n"
 				<< " - " << base << "_mold_surface.ply\n"
-				<< " - " << base << "_violating_points.ply\n";
+				<< " - " << base << "_non-lipschitz_points.ply\n";
 
 		std::cout << "=== moldCheck completed successfully ===\n";
 		std::cout.flush();
