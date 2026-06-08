@@ -128,8 +128,6 @@ MoldCheckMetrics moldCheck(
 		cells[idx] = shootRayOnCell(cell, m, scene, planePoint, direction, MAX_DISTANCE, RAY_EPS);
 	});
 
-	cells = refineBorderCellsWithSubRays(cells,grid, m, scene, planePoint, direction, u, v, MAX_DISTANCE, RAY_EPS);
-
     const double cellDu   = grid.sideU;
 	const double cellDv   = grid.sideV;
 	const double cellArea = cellDu * cellDv;
@@ -149,7 +147,6 @@ MoldCheckMetrics moldCheck(
 	}
 
 	const std::vector<double> coneCosThresholds = makeConeCosThresholds(cells, grid, coneAngleDegrees, borderConeAngleDegrees);
-	const std::vector<double> fixConeCosThresholds(cells.size(), std::cos(borderConeAngleDegrees * M_PI / 180.0));
 
 	parallelFor(allCells, [&](uint idx) {
 		computeClampedCell(idx, cells, planePoint, direction, coneCosThresholds[idx], EPS);
@@ -160,9 +157,13 @@ MoldCheckMetrics moldCheck(
 		((grid.sideU + grid.sideV) * 0.5) /
 		REDUCE_POINTS_REFERENCE_CELL_SIDE;
 	const double REDUCE_POINTS_DISTANCE_THRESHOLD =
-		0.01 * MAX_DISTANCE * reducePointsCellScale;
+		0.02 * MAX_DISTANCE * reducePointsCellScale;
 	cells = reducePoints(cells, grid, REDUCE_POINTS_DISTANCE_THRESHOLD);
 
+	cells = refineBorderCells(cells, grid, m, scene, planePoint, direction, u, v, MAX_DISTANCE, RAY_EPS);
+
+	const std::vector<double> depthConeCosThresholds = makeConeCosThresholds(cells, grid, coneAngleDegrees, borderConeAngleDegrees);
+	const std::vector<double> fixConeCosThresholds(cells.size(), std::cos(borderConeAngleDegrees * M_PI / 180.0));
 
 	double totalAreaHit = 0.0;
 	double clampedAreaHit = 0.0;
@@ -230,7 +231,7 @@ MoldCheckMetrics moldCheck(
 		std::cout << "Validating clamped cells...\n";
 		std::cout.flush();
 
-		PolyMesh violatingPointsMesh = validateClampedCells(depthCells, allCells, direction, coneCosThresholds, EPS);
+		PolyMesh violatingPointsMesh = validateClampedCells(depthCells, allCells, direction, depthConeCosThresholds, EPS);
 		
 		PolyMesh hitPointsMesh;
 		hitPointsMesh.enablePerVertexColor();
