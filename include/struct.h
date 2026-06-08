@@ -28,6 +28,7 @@ struct CellData
 	std::vector<vcl::Point3d> hitPoints;
 	bool hasHit = false;
 	bool hasClampedHit = false;
+	bool hasSplitBorderMiss = false;
 	double clampedDistance = 0.0;
 };
 

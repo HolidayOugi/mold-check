@@ -5,6 +5,7 @@
 #include "struct.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -224,6 +225,181 @@ static CellData makeCellGeometry(
 	cell.clampedDistance = 0.0;
 
 	return cell;
+}
+
+static bool isBorderHitCell(
+	vcl::uint idx,
+	const std::vector<CellData>& cells,
+	const GridChoice& grid)
+{
+	if (!cells[idx].hasHit) {
+		return false;
+	}
+
+	if (cells[idx].hasSplitBorderMiss) {
+		return true;
+	}
+
+	for (vcl::uint neighborIdx : crossNeighborIndices(idx, grid)) {
+		if (!cells[neighborIdx].hasHit) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static std::vector<double> makeConeCosThresholds(
+	const std::vector<CellData>& cells,
+	const GridChoice& grid,
+	double coneAngleDegrees,
+	double borderConeAngleDegrees)
+{
+	const double coneCosThreshold =
+		std::cos(coneAngleDegrees * M_PI / 180.0);
+	const double borderConeCosThreshold =
+		std::cos(borderConeAngleDegrees * M_PI / 180.0);
+
+	std::vector<double> coneCosThresholds(cells.size(), coneCosThreshold);
+
+	for (vcl::uint idx = 0; idx < cells.size(); ++idx) {
+		if (isBorderHitCell(idx, cells, grid)) {
+			coneCosThresholds[idx] = borderConeCosThreshold;
+		}
+	}
+
+	return coneCosThresholds;
+}
+
+static CellData makeSubCellGeometry(
+	vcl::uint parentIdx,
+	vcl::uint subIdx,
+	const GridChoice& grid,
+	const vcl::Point3d& planePoint,
+	const vcl::Point3d& u,
+	const vcl::Point3d& v)
+{
+	using namespace vcl;
+
+	const uint parentRow = parentIdx / grid.cols;
+	const uint parentCol = parentIdx % grid.cols;
+	const uint subRow = subIdx / 2;
+	const uint subCol = subIdx % 2;
+
+	const double halfSideU = grid.sideU * 0.5;
+	const double halfSideV = grid.sideV * 0.5;
+
+	const double u0 = grid.minU + parentCol * grid.sideU + subCol * halfSideU;
+	const double u1 = u0 + halfSideU;
+	const double v0 = grid.minV + parentRow * grid.sideV + subRow * halfSideV;
+	const double v1 = v0 + halfSideV;
+
+	CellData cell;
+	cell.cellCorners = {
+		planePoint + u * u0 + v * v0,
+		planePoint + u * u1 + v * v0,
+		planePoint + u * u1 + v * v1,
+		planePoint + u * u0 + v * v1};
+	cell.cellCenter =
+		planePoint + u * ((u0 + u1) * 0.5) + v * ((v0 + v1) * 0.5);
+	cell.distance = 0.0;
+	cell.hitPoints = {cell.cellCenter};
+	cell.hasHit = false;
+	cell.hasClampedHit = false;
+	cell.hasSplitBorderMiss = false;
+	cell.clampedDistance = 0.0;
+
+	return cell;
+}
+
+static CellData aggregateBorderSubCells(
+	const CellData& parentCell,
+	const std::array<CellData, 4>& subCells,
+	const vcl::Point3d& direction,
+	double maxDistance)
+{
+	using namespace vcl;
+
+	CellData result = parentCell;
+	result.hasClampedHit = false;
+	result.hasSplitBorderMiss = false;
+	result.hitPoints.clear();
+
+	std::vector<double> hitDistances;
+	hitDistances.reserve(subCells.size());
+	std::vector<Point3d> subHitPoints;
+
+	for (const CellData& subCell : subCells) {
+		if (!subCell.hasHit) {
+			result.hasSplitBorderMiss = true;
+			continue;
+		}
+
+		for (const Point3d& hitPoint : subCell.hitPoints) {
+			subHitPoints.push_back(hitPoint);
+			hitDistances.push_back((hitPoint - result.cellCenter).dot(direction));
+		}
+	}
+
+	if (hitDistances.size() < 2) {
+		result.hasHit = false;
+		result.distance = maxDistance;
+		result.hitPoints = {result.cellCenter + direction * maxDistance};
+		result.clampedDistance = maxDistance;
+		return result;
+	}
+
+	std::sort(hitDistances.begin(), hitDistances.end());
+	result.hasHit = true;
+	result.distance = hitDistances.front();
+	result.clampedDistance = result.distance;
+	result.hitPoints = {result.cellCenter + direction * result.distance};
+	result.hitPoints.insert(
+		result.hitPoints.end(),
+		subHitPoints.begin(),
+		subHitPoints.end());
+
+	return result;
+}
+
+static std::vector<CellData> refineBorderCellsWithSubRays(
+	std::vector<CellData> cells,
+	const GridChoice& grid,
+	const vcl::PolyMesh& m,
+	const vcl::embree::Scene& scene,
+	const vcl::Point3d& planePoint,
+	const vcl::Point3d& direction,
+	const vcl::Point3d& u,
+	const vcl::Point3d& v,
+	double maxDistance,
+	float rayEps)
+{
+	using namespace vcl;
+
+	if (cells.size() != grid.rows * grid.cols) {
+		return cells;
+	}
+
+	const std::vector<CellData> originalCells = cells;
+	std::vector<uint> allCells(cells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+
+	parallelFor(allCells, [&](uint idx) {
+		if (!isBorderHitCell(idx, originalCells, grid)) {
+			return;
+		}
+
+		std::array<CellData, 4> subCells;
+		for (uint subIdx = 0; subIdx < subCells.size(); ++subIdx) {
+			const CellData subCell = makeSubCellGeometry(idx, subIdx, grid, planePoint, u, v);
+			subCells[subIdx] = shootRayOnCell(subCell, m, scene, planePoint, direction, maxDistance,rayEps);
+		}
+
+		cells[idx] =
+			aggregateBorderSubCells(originalCells[idx], subCells, direction, maxDistance);
+	});
+
+	return cells;
 }
 
 static void computeClampedCell(
@@ -587,7 +763,7 @@ static std::vector<CellData> smoothMissingDepthCells(
 static std::vector<CellData> fixDepthCellConeViolations(
 	std::vector<CellData> depthCells,
 	const vcl::Point3d& direction,
-	double coneCosThreshold,
+	const std::vector<double>& coneCosThresholds,
 	float eps)
 {
 	using namespace vcl;
@@ -615,7 +791,7 @@ static std::vector<CellData> fixDepthCellConeViolations(
 					original,
 					originalDepthCells[j].hitPoints[0],
 					direction,
-					coneCosThreshold,
+					coneCosThresholds[i],
 					eps)) {
 				continue;
 			}
@@ -626,7 +802,7 @@ static std::vector<CellData> fixDepthCellConeViolations(
 				original,
 				originalDepthCells[j].hitPoints[0],
 				direction,
-				coneCosThreshold,
+				coneCosThresholds[i],
 				eps);
 
 			requiredT = std::max(requiredT, t);
@@ -971,7 +1147,7 @@ static std::vector<CellData> makeDepthCells(
 	const std::vector<CellData>& cells,
 	const vcl::Point3d& direction,
 	const GridChoice& grid,
-	double coneCosThreshold,
+	const std::vector<double>& coneCosThresholds,
 	float eps)
 {
 	using namespace vcl;
@@ -1006,7 +1182,12 @@ static std::vector<CellData> makeDepthCells(
 
 	depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
 
-	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
+	depthCells =
+		fixDepthCellConeViolations(
+			depthCells,
+			direction,
+			coneCosThresholds,
+			eps);
 
 	return depthCells;
 }

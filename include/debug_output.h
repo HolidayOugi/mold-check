@@ -26,7 +26,7 @@ vcl::PolyMesh validateClampedCells(
 	const std::vector<CellData>& cells,
 	const std::vector<vcl::uint>& allCells,
 	const vcl::Point3d& direction,
-	double coneCosThreshold,
+	const std::vector<double>& coneCosThresholds,
 	float eps)
 {
 	using namespace vcl;
@@ -73,7 +73,7 @@ vcl::PolyMesh validateClampedCells(
 			const double cosVal =
 				(dirToOther / norm).dot(-direction);
 
-			if (cosVal > coneCosThreshold + eps) {
+			if (cosVal > coneCosThresholds[i] + eps) {
 				violatingPoints.fetch_add(1);
 				isViolating[i].store(true);
 				violatingOtherCellIds[i] = j;
@@ -95,7 +95,7 @@ vcl::PolyMesh validateClampedCells(
 		std::cout << "Violation between cells "
 				  << i << " and " << violatingOtherCellIds[i]
 				  << ": cosVal = " << violatingCosValues[i]
-				  << ", cosThreshold = " << coneCosThreshold + eps << "\n";
+				  << ", cosThreshold = " << coneCosThresholds[i] + eps << "\n";
 	}
 
 	std::cout << "Clamped validation: "
