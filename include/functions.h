@@ -1006,15 +1006,6 @@ static std::vector<CellData> makeDepthCells(
 
 	depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
 
-	for (uint i = 0; i < 3; ++i) {
-
-		depthCells = smoothMeshEdges(depthCells, direction, grid);
-		
-		depthCells = smoothMeshPits(depthCells, direction, grid);
-
-		depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
-	}
-
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 
 	return depthCells;

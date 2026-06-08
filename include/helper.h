@@ -462,10 +462,10 @@ static std::vector<CellData> keepLargestHitComponent(
 
 static double interpolateFromCoarseLevel(
 	const PullPushLevel& coarse,
-	uint fineRow,
-	uint fineCol,
-	uint fineRows,
-	uint fineCols)
+	vcl::uint fineRow,
+	vcl::uint fineCol,
+	vcl::uint fineRows,
+	vcl::uint fineCols)
 {
 	const double coarseRow =
 		(static_cast<double>(fineRow) + 0.5) *
@@ -503,9 +503,9 @@ static double interpolateFromCoarseLevel(
 
 			const double interpolationWeight = rowWeight * colWeight;
 
-			const uint sampleIndex =
-				static_cast<uint>(sampleRow) * coarse.cols +
-				static_cast<uint>(sampleCol);
+			const vcl::uint sampleIndex =
+				static_cast<vcl::uint>(sampleRow) * coarse.cols +
+				static_cast<vcl::uint>(sampleCol);
 
 			const double weight =
 				interpolationWeight * coarse.weights[sampleIndex];
@@ -519,8 +519,8 @@ static double interpolateFromCoarseLevel(
 		return weightedDistanceSum / weightSum;
 	}
 
-	const uint parentRow = std::min(fineRow / 2, coarse.rows - 1);
-	const uint parentCol = std::min(fineCol / 2, coarse.cols - 1);
+	const vcl::uint parentRow = std::min(fineRow / 2, coarse.rows - 1);
+	const vcl::uint parentCol = std::min(fineCol / 2, coarse.cols - 1);
 
 	return coarse.distances[parentRow * coarse.cols + parentCol];
 }

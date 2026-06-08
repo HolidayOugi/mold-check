@@ -40,8 +40,8 @@ struct HitCellShapeData
 
 struct PullPushLevel
 {
-	uint rows = 0;
-	uint cols = 0;
+	vcl::uint rows = 0;
+	vcl::uint cols = 0;
 	std::vector<double> distances;
 	std::vector<double> weights;
 };

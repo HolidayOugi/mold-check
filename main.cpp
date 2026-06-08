@@ -393,7 +393,7 @@ int main()
     PolyMesh m = loadMesh<PolyMesh>(MESHES_PATH "/bimba_enlarged.ply");
 
 
-    std::vector<double> gridCellSideLengths = {0.2, 0.2};
+    std::vector<double> gridCellSideLengths = {0.4, 0.4};
 
 	const double coneAngleDegrees = 5.0;
 
