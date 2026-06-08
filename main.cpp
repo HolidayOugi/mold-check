@@ -148,21 +148,10 @@ MoldCheckMetrics moldCheck(
 			std::cout.flush();
 	}
 
-	const std::vector<double> coneCosThresholds =
-		makeConeCosThresholds(
-			cells,
-			grid,
-			coneAngleDegrees,
-			borderConeAngleDegrees);
+	const std::vector<double> coneCosThresholds = makeConeCosThresholds(cells, grid, coneAngleDegrees, borderConeAngleDegrees);
 
 	parallelFor(allCells, [&](uint idx) {
-		computeClampedCell(
-			idx,
-			cells,
-			planePoint,
-			direction,
-			coneCosThresholds[idx],
-			EPS);
+		computeClampedCell(idx, cells, planePoint, direction, coneCosThresholds[idx], EPS);
 	});
 
 	const double REDUCE_POINTS_REFERENCE_CELL_SIDE = 0.4;
@@ -170,11 +159,8 @@ MoldCheckMetrics moldCheck(
 		((grid.sideU + grid.sideV) * 0.5) /
 		REDUCE_POINTS_REFERENCE_CELL_SIDE;
 	const double REDUCE_POINTS_DISTANCE_THRESHOLD =
-		0.02 * MAX_DISTANCE * reducePointsCellScale;
-	cells = reducePoints(
-		cells,
-		grid,
-		REDUCE_POINTS_DISTANCE_THRESHOLD);
+		0.01 * MAX_DISTANCE * reducePointsCellScale;
+	cells = reducePoints(cells, grid, REDUCE_POINTS_DISTANCE_THRESHOLD);
 
 
 	double totalAreaHit = 0.0;
@@ -243,13 +229,7 @@ MoldCheckMetrics moldCheck(
 				20000);
 		*/
 
-		depthCells =
-			makeDepthCells(
-				cells,
-				direction,
-				grid,
-				coneCosThresholds,
-				EPS);
+		depthCells = makeDepthCells(cells, direction, grid, coneCosThresholds, EPS);
 	}
 
 	if (debug) {
@@ -269,13 +249,7 @@ MoldCheckMetrics moldCheck(
 		std::cout << "Validating clamped cells...\n";
 		std::cout.flush();
 
-		PolyMesh violatingPointsMesh =
-			validateClampedCells(
-				depthCells,
-				allCells,
-				direction,
-				coneCosThresholds,
-				EPS);
+		PolyMesh violatingPointsMesh = validateClampedCells(depthCells, allCells, direction, coneCosThresholds, EPS);
 		
 		PolyMesh hitPointsMesh;
 		hitPointsMesh.enablePerVertexColor();
@@ -416,7 +390,7 @@ int main()
     std::vector<double> gridCellSideLengths = {0.4, 0.4};
 
 	const double coneAngleDegrees = 5.0;
-	const double borderConeAngleDegrees = 8.0;
+	const double borderConeAngleDegrees = 10.0;
 
 	const double marginFactor = 0.05;
 
@@ -452,25 +426,9 @@ int main()
 		}
 	}
 
-	result = moldCheck(
-		m,
-		gridCellSideLengths,
-		true,
-		fibNormals[bestDirectionIndex],
-		coneAngleDegrees,
-		borderConeAngleDegrees,
-		marginFactor,
-		"best");
+	result = moldCheck(m, gridCellSideLengths, true, fibNormals[bestDirectionIndex], coneAngleDegrees, borderConeAngleDegrees, marginFactor, "best");
 
-	result = moldCheck(
-		m,
-		gridCellSideLengths,
-		true,
-		fibNormals[worstDirectionIndex],
-		coneAngleDegrees,
-		borderConeAngleDegrees,
-		marginFactor,
-		"worst");
+	result = moldCheck(m, gridCellSideLengths, true, fibNormals[worstDirectionIndex], coneAngleDegrees, borderConeAngleDegrees, marginFactor, "worst");
 
     const auto endTime = std::chrono::steady_clock::now();
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);

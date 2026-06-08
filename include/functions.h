@@ -240,7 +240,7 @@ static bool isBorderHitCell(
 		return true;
 	}
 
-	for (vcl::uint neighborIdx : crossNeighborIndices(idx, grid)) {
+	for (vcl::uint neighborIdx : squareNeighborIndices(idx, grid, 3)) {
 		if (!cells[neighborIdx].hasHit) {
 			return true;
 		}
@@ -283,16 +283,16 @@ static CellData makeSubCellGeometry(
 
 	const uint parentRow = parentIdx / grid.cols;
 	const uint parentCol = parentIdx % grid.cols;
-	const uint subRow = subIdx / 2;
-	const uint subCol = subIdx % 2;
+	const uint subRow = subIdx / 3;
+	const uint subCol = subIdx % 3;
 
-	const double halfSideU = grid.sideU * 0.5;
-	const double halfSideV = grid.sideV * 0.5;
+	const double subSideU = grid.sideU / 3.0;
+	const double subSideV = grid.sideV / 3.0;
 
-	const double u0 = grid.minU + parentCol * grid.sideU + subCol * halfSideU;
-	const double u1 = u0 + halfSideU;
-	const double v0 = grid.minV + parentRow * grid.sideV + subRow * halfSideV;
-	const double v1 = v0 + halfSideV;
+	const double u0 = grid.minU + parentCol * grid.sideU + subCol * subSideU;
+	const double u1 = u0 + subSideU;
+	const double v0 = grid.minV + parentRow * grid.sideV + subRow * subSideV;
+	const double v1 = v0 + subSideV;
 
 	CellData cell;
 	cell.cellCorners = {
@@ -314,7 +314,7 @@ static CellData makeSubCellGeometry(
 
 static CellData aggregateBorderSubCells(
 	const CellData& parentCell,
-	const std::array<CellData, 4>& subCells,
+	const std::array<CellData, 9>& subCells,
 	const vcl::Point3d& direction,
 	double maxDistance)
 {
@@ -341,7 +341,7 @@ static CellData aggregateBorderSubCells(
 		}
 	}
 
-	if (hitDistances.size() < 2) {
+	if (hitDistances.size() < 5) {
 		result.hasHit = false;
 		result.distance = maxDistance;
 		result.hitPoints = {result.cellCenter + direction * maxDistance};
@@ -350,9 +350,18 @@ static CellData aggregateBorderSubCells(
 	}
 
 	std::sort(hitDistances.begin(), hitDistances.end());
+	const double minDistance = hitDistances.front();
+
+	if (minDistance >= parentCell.distance) {
+		result = parentCell;
+		result.hasSplitBorderMiss = std::any_of(subCells.begin(), subCells.end(), [](const CellData& subCell) { return !subCell.hasHit; });
+		return result;
+	}
+
 	result.hasHit = true;
-	result.distance = hitDistances.front();
+	result.distance = minDistance;
 	result.clampedDistance = result.distance;
+	result.hasClampedHit = true;
 	result.hitPoints = {result.cellCenter + direction * result.distance};
 	result.hitPoints.insert(
 		result.hitPoints.end(),
@@ -389,14 +398,13 @@ static std::vector<CellData> refineBorderCellsWithSubRays(
 			return;
 		}
 
-		std::array<CellData, 4> subCells;
+		std::array<CellData, 9> subCells;
 		for (uint subIdx = 0; subIdx < subCells.size(); ++subIdx) {
 			const CellData subCell = makeSubCellGeometry(idx, subIdx, grid, planePoint, u, v);
-			subCells[subIdx] = shootRayOnCell(subCell, m, scene, planePoint, direction, maxDistance,rayEps);
+			subCells[subIdx] = shootRayOnCell(subCell, m, scene, planePoint, direction, maxDistance, rayEps);
 		}
 
-		cells[idx] =
-			aggregateBorderSubCells(originalCells[idx], subCells, direction, maxDistance);
+		cells[idx] = aggregateBorderSubCells(originalCells[idx], subCells, direction, maxDistance);
 	});
 
 	return cells;
@@ -1143,6 +1151,56 @@ static std::vector<CellData> smoothMeshPits(
 	return depthCells;
 }
 
+static std::vector<CellData> clampBorderDepthDrops(std::vector<CellData> depthCells,
+	const std::vector<CellData>& cells,
+	const vcl::Point3d& direction,
+	const GridChoice& grid)
+{
+	using namespace vcl;
+
+	if (depthCells.size() != cells.size() ||
+		depthCells.size() != grid.rows * grid.cols) {
+		return depthCells;
+	}
+
+	const std::vector<CellData> originalDepthCells = depthCells;
+	std::vector<uint> allCells(depthCells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+
+	parallelFor(allCells, [&](uint idx) {
+		if (!isBorderHitCell(idx, cells, grid)) {
+			return;
+		}
+
+		std::vector<double> neighborDistances;
+		for (uint neighborIdx : squareNeighborIndices(idx, grid, 3)) {
+			if (neighborIdx == idx || !originalDepthCells[neighborIdx].hasHit) {
+				continue;
+			}
+			neighborDistances.push_back(originalDepthCells[neighborIdx].distance);
+		}
+
+		if (neighborDistances.empty()) {
+			return;
+		}
+
+		std::sort(neighborDistances.begin(), neighborDistances.end());
+		const double neighborMedian = neighborDistances[neighborDistances.size() / 2];
+		const double maxAllowedDistance = neighborMedian;
+
+		if (originalDepthCells[idx].distance <= maxAllowedDistance) {
+			return;
+		}
+
+		depthCells[idx].distance = maxAllowedDistance;
+		depthCells[idx].clampedDistance = std::min(depthCells[idx].clampedDistance, maxAllowedDistance);
+		depthCells[idx].hitPoints = {depthCells[idx].cellCenter + direction * maxAllowedDistance};
+		depthCells[idx].hasClampedHit = true;
+	});
+
+	return depthCells;
+}
+
 static std::vector<CellData> makeDepthCells(
 	const std::vector<CellData>& cells,
 	const vcl::Point3d& direction,
@@ -1182,12 +1240,9 @@ static std::vector<CellData> makeDepthCells(
 
 	depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
 
-	depthCells =
-		fixDepthCellConeViolations(
-			depthCells,
-			direction,
-			coneCosThresholds,
-			eps);
+	depthCells = clampBorderDepthDrops(depthCells, cells, direction, grid);
+
+	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThresholds, eps);
 
 	return depthCells;
 }
