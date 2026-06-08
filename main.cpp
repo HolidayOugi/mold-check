@@ -149,6 +149,7 @@ MoldCheckMetrics moldCheck(
 	}
 
 	const std::vector<double> coneCosThresholds = makeConeCosThresholds(cells, grid, coneAngleDegrees, borderConeAngleDegrees);
+	const std::vector<double> fixConeCosThresholds(cells.size(), std::cos(borderConeAngleDegrees * M_PI / 180.0));
 
 	parallelFor(allCells, [&](uint idx) {
 		computeClampedCell(idx, cells, planePoint, direction, coneCosThresholds[idx], EPS);
@@ -218,29 +219,9 @@ MoldCheckMetrics moldCheck(
 	if (debug) {
 
 		std::cout << "Beginning Depth Smoothing phase...\n";
-		/*
-		depthCells =
-			smoothMissingDepthCells(
-				makeDepthCells(cells, direction, grid),
-				cells,
-				direction,
-				grid,
-				3,
-				20000);
-		*/
-
-		depthCells = makeDepthCells(cells, direction, grid, coneCosThresholds, EPS);
-	}
-
-	if (debug) {
+		depthCells = makeDepthCells(cells, direction, grid, fixConeCosThresholds, EPS);
 		std::cout << "Depth smoothing complete.\n";
 		std::cout.flush();
-		//depthCells =
-		//	fixDepthCellConeViolations(
-		//		depthCells,
-		//		direction,
-		//		coneCosThresholds,
-		//		EPS);
 	}
 
 	
@@ -390,7 +371,7 @@ int main()
     std::vector<double> gridCellSideLengths = {0.4, 0.4};
 
 	const double coneAngleDegrees = 5.0;
-	const double borderConeAngleDegrees = 10.0;
+	const double borderConeAngleDegrees = 8.0;
 
 	const double marginFactor = 0.05;
 
