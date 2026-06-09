@@ -33,6 +33,7 @@
 #include <filesystem>
 #include <limits>
 #include <numeric>
+#include <utility>
 #include <vector>
 
 #include "include/struct.h"
@@ -218,16 +219,6 @@ MoldCheckMetrics moldCheck(
 	if (debug) {
 
 		std::cout << "Beginning Depth Smoothing phase...\n";
-		/*
-		depthCells =
-			smoothMissingDepthCells(
-				makeDepthCells(cells, direction, grid),
-				cells,
-				direction,
-				grid,
-				3,
-				20000);
-		*/
 
 		depthCells =
 			makeDepthCells(
@@ -236,22 +227,7 @@ MoldCheckMetrics moldCheck(
 				grid,
 				CONE_COS_THRESHOLD,
 				EPS);
-	}
-
-	if (debug) {
 		std::cout << "Depth smoothing complete.\n";
-		std::cout.flush();
-		//depthCells =
-		//	fixDepthCellConeViolations(
-		//		depthCells,
-		//		direction,
-		//		CONE_COS_THRESHOLD,
-		//		EPS);
-	}
-
-	
-
-	if (debug) {
 		std::cout << "Validating clamped cells...\n";
 		std::cout.flush();
 
@@ -409,10 +385,14 @@ int main()
 	worstResult.score = std::numeric_limits<double>::infinity();
 	int bestDirectionIndex = 0;
 	int worstDirectionIndex = 0;
+	std::vector<std::pair<double, int>> scoredDirections;
 
 	for (const auto& direction : fibNormals) {
+		const int directionIndex =
+			static_cast<int>(&direction - &fibNormals[0]);
 		std::cout << "Processing direction: " << direction << "\n";
 		result = moldCheck(m, gridCellSideLengths, false, direction, coneAngleDegrees, marginFactor);
+		scoredDirections.push_back({result.score, directionIndex});
 		std::cout << "Score: " << result.score
 					  << " (hit ratio: " << result.hitRatio
 					  << ", compactness: " << result.compactness
@@ -421,15 +401,22 @@ int main()
 					  << ", hidden: " << result.percentHidden << "%)\n";
 		if (result.score > bestResult.score) {
 			bestResult = result;
-			bestDirectionIndex = &direction - &fibNormals[0];
+			bestDirectionIndex = directionIndex;
 			std::cout << ("New best direction found! Index: " + std::to_string(bestDirectionIndex) + ", Score: " + std::to_string(bestResult.score) + "\n");
 		}
 		if (result.score < worstResult.score) {
 			worstResult = result;
-			worstDirectionIndex = &direction - &fibNormals[0];
+			worstDirectionIndex = directionIndex;
 			std::cout << ("New worst direction found! Index: " + std::to_string(worstDirectionIndex) + ", Score: " + std::to_string(worstResult.score) + "\n");
 		}
 	}
+
+	std::sort(
+		scoredDirections.begin(),
+		scoredDirections.end(),
+		[](const auto& a, const auto& b) {
+			return a.first < b.first;
+		});
 
 	result = moldCheck(
 		m,
@@ -448,6 +435,39 @@ int main()
 		coneAngleDegrees,
 		marginFactor,
 		"worst");
+
+	const int medianDebugCount =
+		std::min<int>(15, static_cast<int>(scoredDirections.size()));
+	const int medianCenter =
+		static_cast<int>(scoredDirections.size() / 2);
+	const int medianStart =
+		std::max(
+			0,
+			std::min(
+				medianCenter - medianDebugCount / 2,
+				static_cast<int>(scoredDirections.size()) - medianDebugCount));
+
+	for (int i = 0; i < medianDebugCount; ++i) {
+		const auto& [medianScore, medianDirectionIndex] =
+			scoredDirections[medianStart + i];
+		const std::string medianDir =
+			"median " + std::to_string(i + 1);
+
+		std::cout << "Processing median direction " << (i + 1)
+				  << "/" << medianDebugCount
+				  << ". Index: " << medianDirectionIndex
+				  << ", Score: " << medianScore
+				  << ", Output: " << medianDir << "\n";
+
+		result = moldCheck(
+			m,
+			gridCellSideLengths,
+			true,
+			fibNormals[medianDirectionIndex],
+			coneAngleDegrees,
+			marginFactor,
+			medianDir);
+	}
 
     const auto endTime = std::chrono::steady_clock::now();
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
