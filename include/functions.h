@@ -240,7 +240,7 @@ static bool isBorderHitCell(
 		return true;
 	}
 
-	for (vcl::uint neighborIdx : squareNeighborIndices(idx, grid, 5)) {
+	for (vcl::uint neighborIdx : squareNeighborIndices(idx, grid, 3)) {
 		if (!cells[neighborIdx].hasHit) {
 			return true;
 		}
@@ -371,7 +371,7 @@ static CellData aggregateBorderSubCells(
 	return result;
 }
 
-static std::vector<CellData> refineBorderCells(
+static std::vector<CellData> refineBorderCellsWithSubRays(
 	std::vector<CellData> cells,
 	const GridChoice& grid,
 	const vcl::PolyMesh& m,
@@ -873,7 +873,7 @@ static std::vector<CellData> clampBorderDrops(std::vector<CellData> depthCells,
 		}
 
 		std::vector<double> neighborDistances;
-		for (uint neighborIdx : squareNeighborIndices(idx, grid, 5)) {
+		for (uint neighborIdx : squareNeighborIndices(idx, grid, 3)) {
 			if (neighborIdx == idx || !originalDepthCells[neighborIdx].hasHit) {
 				continue;
 			}
