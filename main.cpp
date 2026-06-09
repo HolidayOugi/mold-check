@@ -69,11 +69,12 @@ MoldCheckMetrics moldCheck(
 	bool                       debug,
 	vcl::Point3d 			   direction,
 	const double 			   coneAngleDegrees,
-	const double 			   borderConeAngleDegrees,
 	const double 			   marginFactor,
 	const std::string&         debugResultsSubdir = "")
 {
 	using namespace vcl;
+
+	const double CONE_COS_THRESHOLD = std::cos(coneAngleDegrees * M_PI / 180.0);
     
     if (debug) {
         std::cout << "=== moldCheck started ===\n";
@@ -119,6 +120,9 @@ MoldCheckMetrics moldCheck(
 
 	makeGrid(grid, gridCellSideLengths);
 
+    const double cellDu   = grid.sideU;
+	const double cellDv   = grid.sideV;
+	const double cellArea = cellDu * cellDv;
 	std::vector<uint> allCells(grid.rows * grid.cols);
 	std::iota(allCells.begin(), allCells.end(), 0);
 	std::vector<CellData> cells(allCells.size());
@@ -127,12 +131,6 @@ MoldCheckMetrics moldCheck(
 		const CellData cell = makeCellGeometry(idx, grid, planePoint, u, v);
 		cells[idx] = shootRayOnCell(cell, m, scene, planePoint, direction, MAX_DISTANCE, RAY_EPS);
 	});
-
-	cells = refineBorderCellsWithSubRays(cells,grid, m, scene, planePoint, direction, u, v, MAX_DISTANCE, RAY_EPS);
-
-    const double cellDu   = grid.sideU;
-	const double cellDv   = grid.sideV;
-	const double cellArea = cellDu * cellDv;
 
 	uint rawHitCount = 0;
         
@@ -148,21 +146,9 @@ MoldCheckMetrics moldCheck(
 			std::cout.flush();
 	}
 
-	const std::vector<double> coneCosThresholds =
-		makeConeCosThresholds(
-			cells,
-			grid,
-			coneAngleDegrees,
-			borderConeAngleDegrees);
 
 	parallelFor(allCells, [&](uint idx) {
-		computeClampedCell(
-			idx,
-			cells,
-			planePoint,
-			direction,
-			coneCosThresholds[idx],
-			EPS);
+		computeClampedCell(idx, cells, planePoint, direction, CONE_COS_THRESHOLD, EPS);
 	});
 
 	const double REDUCE_POINTS_REFERENCE_CELL_SIDE = 0.4;
@@ -248,7 +234,7 @@ MoldCheckMetrics moldCheck(
 				cells,
 				direction,
 				grid,
-				coneCosThresholds,
+				CONE_COS_THRESHOLD,
 				EPS);
 	}
 
@@ -259,7 +245,7 @@ MoldCheckMetrics moldCheck(
 		//	fixDepthCellConeViolations(
 		//		depthCells,
 		//		direction,
-		//		coneCosThresholds,
+		//		CONE_COS_THRESHOLD,
 		//		EPS);
 	}
 
@@ -269,13 +255,7 @@ MoldCheckMetrics moldCheck(
 		std::cout << "Validating clamped cells...\n";
 		std::cout.flush();
 
-		PolyMesh violatingPointsMesh =
-			validateClampedCells(
-				depthCells,
-				allCells,
-				direction,
-				coneCosThresholds,
-				EPS);
+		PolyMesh violatingPointsMesh = validateClampedCells(depthCells, allCells, direction, CONE_COS_THRESHOLD, EPS);
 		
 		PolyMesh hitPointsMesh;
 		hitPointsMesh.enablePerVertexColor();
@@ -416,7 +396,6 @@ int main()
     std::vector<double> gridCellSideLengths = {0.4, 0.4};
 
 	const double coneAngleDegrees = 5.0;
-	const double borderConeAngleDegrees = 8.0;
 
 	const double marginFactor = 0.05;
 
@@ -433,7 +412,7 @@ int main()
 
 	for (const auto& direction : fibNormals) {
 		std::cout << "Processing direction: " << direction << "\n";
-		result = moldCheck(m, gridCellSideLengths, false, direction, coneAngleDegrees, borderConeAngleDegrees, marginFactor);
+		result = moldCheck(m, gridCellSideLengths, false, direction, coneAngleDegrees, marginFactor);
 		std::cout << "Score: " << result.score
 					  << " (hit ratio: " << result.hitRatio
 					  << ", compactness: " << result.compactness
@@ -458,7 +437,6 @@ int main()
 		true,
 		fibNormals[bestDirectionIndex],
 		coneAngleDegrees,
-		borderConeAngleDegrees,
 		marginFactor,
 		"best");
 
@@ -468,7 +446,6 @@ int main()
 		true,
 		fibNormals[worstDirectionIndex],
 		coneAngleDegrees,
-		borderConeAngleDegrees,
 		marginFactor,
 		"worst");
 
