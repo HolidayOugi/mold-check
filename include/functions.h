@@ -3,6 +3,7 @@
 
 #include "helper.h"
 #include "struct.h"
+#include "debug_output.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,12 +14,10 @@
 #include <unordered_set>
 #include <vector>
 
-#include <Eigen/Sparse>
-#include <Eigen/SparseCholesky>
-
 #include <vclib/algorithms/mesh/update/bounding_box.h>
 #include <vclib/embree/scene.h>
 #include <vclib/meshes.h>
+
 
 static std::tuple<vcl::Point3d, vcl::Point3d> makePlane(
 	const vcl::PolyMesh& m,
@@ -790,183 +789,13 @@ static std::vector<CellData> smoothMeshPits(
 	return depthCells;
 }
 
-static std::vector<CellData> fillHitHoleHarmonic(
-	std::vector<CellData> depthCells,
-	const vcl::Point3d& direction,
-	const GridChoice& grid,
-	vcl::uint transitionRadius = std::numeric_limits<vcl::uint>::max())
-{
-	using namespace vcl;
-
-	struct Coord
-	{
-		int row;
-		int col;
-	};
-
-	if (depthCells.size() != grid.rows * grid.cols) {
-		return depthCells;
-	}
-
-	const auto inside = [&](int row, int col) {
-		return
-			row >= 0 &&
-			col >= 0 &&
-			row < static_cast<int>(grid.rows) &&
-			col < static_cast<int>(grid.cols);
-	};
-
-	const auto index = [&](int row, int col) {
-		return static_cast<uint>(row) * grid.cols + static_cast<uint>(col);
-	};
-
-	std::vector<char> solveCell(depthCells.size(), false);
-
-	for (uint i = 0; i < depthCells.size(); ++i) {
-		solveCell[i] = depthCells[i].hasHit;
-	}
-
-	const uint fullRadius = grid.rows + grid.cols;
-	const uint maxRadius =
-		transitionRadius >= fullRadius ?
-			fullRadius :
-			transitionRadius;
-
-	for (uint radius = 0; radius < maxRadius; ++radius) {
-		std::vector<char> nextSolveCell = solveCell;
-
-		for (uint i = 0; i < depthCells.size(); ++i) {
-			if (!solveCell[i]) {
-				continue;
-			}
-
-			for (uint neighborIndex : crossNeighborIndices(i, grid)) {
-				if (!depthCells[neighborIndex].hasHit) {
-					nextSolveCell[neighborIndex] = true;
-				}
-			}
-		}
-
-		solveCell = std::move(nextSolveCell);
-	}
-
-	for (uint row = 0; row < grid.rows; ++row) {
-		for (uint col = 0; col < grid.cols; ++col) {
-			if (row == 0 ||
-				col == 0 ||
-				row + 1 == grid.rows ||
-				col + 1 == grid.cols) {
-				solveCell[row * grid.cols + col] = false;
-			}
-		}
-	}
-
-	std::vector<int> unknownIds(depthCells.size(), -1);
-	std::vector<Coord> unknownCells;
-	unknownCells.reserve(depthCells.size());
-
-	for (uint i = 0; i < depthCells.size(); ++i) {
-		if (!solveCell[i]) {
-			continue;
-		}
-
-		unknownIds[i] = static_cast<int>(unknownCells.size());
-		unknownCells.push_back({
-			static_cast<int>(i / grid.cols),
-			static_cast<int>(i % grid.cols)});
-	}
-
-	const int unknownCount = static_cast<int>(unknownCells.size());
-	if (unknownCount == 0 ||
-		unknownCount == static_cast<int>(depthCells.size())) {
-		return depthCells;
-	}
-
-	using SparseMatrix = Eigen::SparseMatrix<double>;
-	using Triplet = Eigen::Triplet<double>;
-
-	std::vector<Triplet> triplets;
-	triplets.reserve(static_cast<std::size_t>(unknownCount) * 5);
-	Eigen::VectorXd rhs = Eigen::VectorXd::Zero(unknownCount);
-
-	static constexpr std::array<std::array<int, 2>, 4> dirs = {{
-		{{ -1,  0 }},
-		{{  1,  0 }},
-		{{  0, -1 }},
-		{{  0,  1 }}}};
-
-	for (const Coord& coord : unknownCells) {
-		const int rowId = unknownIds[index(coord.row, coord.col)];
-		int degree = 0;
-
-		for (const auto& dir : dirs) {
-			const int row = coord.row + dir[0];
-			const int col = coord.col + dir[1];
-
-			if (!inside(row, col)) {
-				continue;
-			}
-
-			++degree;
-
-			const uint neighborIndex = index(row, col);
-			const int neighborId = unknownIds[neighborIndex];
-
-			if (neighborId >= 0) {
-				triplets.emplace_back(rowId, neighborId, -1.0);
-			}
-			else {
-				rhs[rowId] += depthCells[neighborIndex].distance;
-			}
-		}
-
-		if (degree == 0) {
-			throw std::runtime_error("Cella isolata senza vicini validi.");
-		}
-
-		triplets.emplace_back(rowId, rowId, static_cast<double>(degree));
-	}
-
-	SparseMatrix matrix(unknownCount, unknownCount);
-	matrix.setFromTriplets(triplets.begin(), triplets.end());
-	matrix.makeCompressed();
-
-	Eigen::SimplicialLDLT<SparseMatrix> solver;
-	solver.compute(matrix);
-
-	if (solver.info() != Eigen::Success) {
-		throw std::runtime_error(
-			"Factorizzazione fallita. Il buco potrebbe non avere un bordo vincolato.");
-	}
-
-	const Eigen::VectorXd solution = solver.solve(rhs);
-
-	if (solver.info() != Eigen::Success) {
-		throw std::runtime_error("Soluzione del sistema fallita.");
-	}
-
-	for (const Coord& coord : unknownCells) {
-		const uint i = index(coord.row, coord.col);
-		const double distance = solution[unknownIds[i]];
-
-		depthCells[i].distance = distance;
-		depthCells[i].clampedDistance = distance;
-		depthCells[i].hitPoints = {
-			depthCells[i].cellCenter + direction * distance};
-		if (depthCells[i].hasHit) {
-			depthCells[i].hasClampedHit = true;
-		}
-	}
-
-	return depthCells;
-}
-
 static std::vector<CellData> makeDepthCells(
 	const std::vector<CellData>& cells,
 	const vcl::Point3d& direction,
 	const GridChoice& grid,
 	double coneCosThreshold,
-	float eps)
+	float eps,
+	const std::string&         debugResultsSubdir = "")
 {
 	using namespace vcl;
 
@@ -1002,9 +831,35 @@ static std::vector<CellData> makeDepthCells(
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 
-	depthCells = fillHitHoleHarmonic(depthCells, direction, grid, 999);
+	PolyMesh depthPointsMesh;
+	depthPointsMesh.enablePerVertexColor();
+	for (uint i = 0; i < depthCells.size(); ++i) {
+		const Point3d depthPoint =
+			depthCells[i].cellCenter + direction * depthCells[i].distance;
+		Color depthColor = Color::White;
+		if (depthCells[i].hasHit) {
+			if (depthCells[i].hasClampedHit) {
+				depthColor = Color::Green;
+			}
+			else {
+				depthColor = Color::Red;
+			}
+		}
+		addColoredPoint(
+			depthPointsMesh,
+			depthPoint,
+			depthColor);
+	}
 
-	depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
+	const std::filesystem::path debugOutputDir =
+			std::filesystem::path(RESULTS_PATH) /
+			debugResultsSubdir;
+	
+	const std::string base =
+			(debugOutputDir / "mold_check").string();
+	saveMesh(depthPointsMesh, base + "_original_mold_points.ply");
+
+	//depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 

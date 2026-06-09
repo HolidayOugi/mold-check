@@ -226,7 +226,8 @@ MoldCheckMetrics moldCheck(
 				direction,
 				grid,
 				CONE_COS_THRESHOLD,
-				EPS);
+				EPS,
+				debugResultsSubdir);
 		std::cout << "Depth smoothing complete.\n";
 		std::cout << "Validating clamped cells...\n";
 		std::cout.flush();
@@ -295,12 +296,15 @@ MoldCheckMetrics moldCheck(
 
 		std::filesystem::create_directories(debugOutputDir);
 
+		/*
 		for (const auto& entry :
 			 std::filesystem::directory_iterator(debugOutputDir)) {
 			if (entry.is_regular_file() && entry.path().extension() == ".ply") {
 				std::filesystem::remove(entry.path());
 			}
 		}
+
+		*/
 
 		const std::string base =
 			(debugOutputDir / "mold_check").string();
