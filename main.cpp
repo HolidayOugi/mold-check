@@ -21,6 +21,7 @@
  ****************************************************************************/
 
 #include <vclib/embree/scene.h>
+#include <vclib/igl/booleans.h>
 #include <vclib/io.h>
 #include <vclib/meshes.h>
 #include <vclib/algorithms/core/fibonacci.h>
@@ -359,6 +360,60 @@ MoldCheckMetrics moldCheck(
     return metrics;
 }
 
+static vcl::PolyMesh makeContainingBoxMesh(
+    vcl::PolyMesh mesh,
+    double marginFactor)
+{
+    using namespace vcl;
+    using namespace vcl::igl;
+
+    updateBoundingBox(mesh);
+
+    const double maxDistance = mesh.boundingBox().diagonal();
+    const double boxMargin = marginFactor * maxDistance;
+
+    const Point3d boxMin =
+        mesh.boundingBox().min() - Point3d(boxMargin, boxMargin, boxMargin);
+    const Point3d boxMax =
+        mesh.boundingBox().max() + Point3d(boxMargin, boxMargin, boxMargin);
+
+    PolyMesh boxMesh;
+
+    const uint v0 = boxMesh.addVertex(Point3d(boxMin.x(), boxMin.y(), boxMin.z()));
+    const uint v1 = boxMesh.addVertex(Point3d(boxMax.x(), boxMin.y(), boxMin.z()));
+    const uint v2 = boxMesh.addVertex(Point3d(boxMax.x(), boxMax.y(), boxMin.z()));
+    const uint v3 = boxMesh.addVertex(Point3d(boxMin.x(), boxMax.y(), boxMin.z()));
+
+    const uint v4 = boxMesh.addVertex(Point3d(boxMin.x(), boxMin.y(), boxMax.z()));
+    const uint v5 = boxMesh.addVertex(Point3d(boxMax.x(), boxMin.y(), boxMax.z()));
+    const uint v6 = boxMesh.addVertex(Point3d(boxMax.x(), boxMax.y(), boxMax.z()));
+    const uint v7 = boxMesh.addVertex(Point3d(boxMin.x(), boxMax.y(), boxMax.z()));
+
+    boxMesh.addFace(v0, v3, v2);
+    boxMesh.addFace(v0, v2, v1);
+
+    boxMesh.addFace(v4, v5, v6);
+    boxMesh.addFace(v4, v6, v7);
+
+    boxMesh.addFace(v0, v1, v5);
+    boxMesh.addFace(v0, v5, v4);
+
+    boxMesh.addFace(v1, v2, v6);
+    boxMesh.addFace(v1, v6, v5);
+
+    boxMesh.addFace(v2, v3, v7);
+    boxMesh.addFace(v2, v7, v6);
+
+    boxMesh.addFace(v3, v0, v4);
+    boxMesh.addFace(v3, v4, v7);
+
+    updateBoundingBox(boxMesh);
+
+    PolyMesh result = meshBoolean(boxMesh, mesh, MeshBoolean::DIFFERENCE);
+
+    return result;
+}
+
 int main()
 {
     using namespace vcl;
@@ -371,6 +426,10 @@ int main()
 
 
     PolyMesh m = loadMesh<PolyMesh>(MESHES_PATH "/bimba_enlarged.ply");
+
+	const PolyMesh moldMesh = makeContainingBoxMesh(m, 0.1);
+
+	saveMesh(moldMesh, RESULTS_PATH "/mold-bool.ply");
 
 
     std::vector<double> gridCellSideLengths = {0.4, 0.4};

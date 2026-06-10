@@ -6,7 +6,10 @@
 #include "debug_output.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
+#include <iostream>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
@@ -17,6 +20,10 @@
 #include <vclib/algorithms/mesh/update/bounding_box.h>
 #include <vclib/embree/scene.h>
 #include <vclib/meshes.h>
+
+#include <Eigen/Dense>
+#include <Eigen/IterativeLinearSolvers>
+#include <Eigen/Sparse>
 
 
 static std::tuple<vcl::Point3d, vcl::Point3d> makePlane(
@@ -470,6 +477,273 @@ static std::vector<CellData> fixDepthCellConeViolations(
 	return depthCells;
 }
 
+static std::vector<CellData> biharmonicFillHitCells(
+	std::vector<CellData> depthCells,
+	const GridChoice& grid,
+	const vcl::Point3d& direction,
+	double eps,
+	vcl::uint collarRadius = 3)
+{
+	using namespace vcl;
+
+	if (depthCells.size() != grid.rows * grid.cols) {
+		return depthCells;
+	}
+
+	const auto isNearHitCell = [&](uint idx, uint radius) {
+		const uint row = idx / grid.cols;
+		const uint col = idx % grid.cols;
+
+		const int minRow =
+			std::max<int>(0, static_cast<int>(row) - static_cast<int>(radius));
+		const int maxRow =
+			std::min<int>(
+				static_cast<int>(grid.rows) - 1,
+				static_cast<int>(row) + static_cast<int>(radius));
+		const int minCol =
+			std::max<int>(0, static_cast<int>(col) - static_cast<int>(radius));
+		const int maxCol =
+			std::min<int>(
+				static_cast<int>(grid.cols) - 1,
+				static_cast<int>(col) + static_cast<int>(radius));
+
+		for (int r = minRow; r <= maxRow; ++r) {
+			for (int c = minCol; c <= maxCol; ++c) {
+				const uint neighborIdx =
+					static_cast<uint>(r) * grid.cols +
+					static_cast<uint>(c);
+				if (depthCells[neighborIdx].hasHit) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	};
+
+	std::vector<int> unknownVarIds(depthCells.size(), -1);
+	std::vector<char> isFixedCollar(depthCells.size(), false);
+	std::vector<uint> unknownIds;
+	std::vector<uint> fixedIds;
+	unknownIds.reserve(depthCells.size());
+
+	for (uint idx = 0; idx < depthCells.size(); ++idx) {
+		if (!std::isfinite(depthCells[idx].distance)) {
+			continue;
+		}
+
+		const bool isMovableBorder =
+			!depthCells[idx].hasHit &&
+			collarRadius > 0 &&
+			isNearHitCell(idx, collarRadius);
+
+		if (!depthCells[idx].hasHit && !isMovableBorder) {
+			continue;
+		}
+
+		unknownVarIds[idx] = static_cast<int>(unknownIds.size());
+		unknownIds.push_back(idx);
+	}
+
+	if (unknownIds.empty()) {
+		return depthCells;
+	}
+
+	for (uint idx = 0; idx < depthCells.size(); ++idx) {
+		if (unknownVarIds[idx] >= 0 ||
+			!std::isfinite(depthCells[idx].distance)) {
+			continue;
+		}
+
+		const uint row = idx / grid.cols;
+		const uint col = idx % grid.cols;
+		bool touchesUnknown = false;
+
+		const int minRow =
+			std::max<int>(0, static_cast<int>(row) - static_cast<int>(collarRadius));
+		const int maxRow =
+			std::min<int>(
+				static_cast<int>(grid.rows) - 1,
+				static_cast<int>(row) + static_cast<int>(collarRadius));
+		const int minCol =
+			std::max<int>(0, static_cast<int>(col) - static_cast<int>(collarRadius));
+		const int maxCol =
+			std::min<int>(
+				static_cast<int>(grid.cols) - 1,
+				static_cast<int>(col) + static_cast<int>(collarRadius));
+
+		for (int r = minRow; r <= maxRow && !touchesUnknown; ++r) {
+			for (int c = minCol; c <= maxCol; ++c) {
+				const uint neighborIdx =
+					static_cast<uint>(r) * grid.cols +
+					static_cast<uint>(c);
+				if (unknownVarIds[neighborIdx] >= 0) {
+					touchesUnknown = true;
+					break;
+				}
+			}
+		}
+
+		if (touchesUnknown) {
+			isFixedCollar[idx] = true;
+			fixedIds.push_back(idx);
+		}
+	}
+
+	if (fixedIds.empty()) {
+		return depthCells;
+	}
+
+	std::cout << "  biharmonic unknown cells: " << unknownIds.size()
+			  << ", fixed collar cells: " << fixedIds.size() << "\n";
+	std::cout.flush();
+
+	std::vector<uint> laplacianRowCellIds = unknownIds;
+	laplacianRowCellIds.insert(
+		laplacianRowCellIds.end(),
+		fixedIds.begin(),
+		fixedIds.end());
+
+	const Eigen::Index rowCount =
+		static_cast<Eigen::Index>(laplacianRowCellIds.size());
+	const Eigen::Index unknownCount =
+		static_cast<Eigen::Index>(unknownIds.size());
+
+	std::vector<Eigen::Triplet<double>> laplacianTriplets;
+	laplacianTriplets.reserve(laplacianRowCellIds.size() * 5);
+	Eigen::VectorXd fixedRhs = Eigen::VectorXd::Zero(rowCount);
+
+	for (uint rowIdx = 0; rowIdx < laplacianRowCellIds.size(); ++rowIdx) {
+		const uint cellIdx = laplacianRowCellIds[rowIdx];
+		const uint cellRow = cellIdx / grid.cols;
+		const uint cellCol = cellIdx % grid.cols;
+		uint usedNeighborCount = 0;
+
+		const auto addNeighbor = [&](uint neighborIdx) {
+			if (unknownVarIds[neighborIdx] >= 0) {
+				laplacianTriplets.emplace_back(
+					static_cast<int>(rowIdx),
+					unknownVarIds[neighborIdx],
+					1.0);
+				++usedNeighborCount;
+				return;
+			}
+
+			if (isFixedCollar[neighborIdx]) {
+				fixedRhs(static_cast<Eigen::Index>(rowIdx)) -=
+					depthCells[neighborIdx].distance;
+				++usedNeighborCount;
+			}
+		};
+
+		if (cellCol > 0) {
+			addNeighbor(cellIdx - 1);
+		}
+		if (cellCol + 1 < grid.cols) {
+			addNeighbor(cellIdx + 1);
+		}
+		if (cellRow > 0) {
+			addNeighbor(cellIdx - grid.cols);
+		}
+		if (cellRow + 1 < grid.rows) {
+			addNeighbor(cellIdx + grid.cols);
+		}
+
+		if (usedNeighborCount == 0) {
+			if (unknownVarIds[cellIdx] >= 0) {
+				laplacianTriplets.emplace_back(
+					static_cast<int>(rowIdx),
+					unknownVarIds[cellIdx],
+					1.0);
+				fixedRhs(static_cast<Eigen::Index>(rowIdx)) =
+					depthCells[cellIdx].distance;
+			}
+			continue;
+		}
+
+		if (unknownVarIds[cellIdx] >= 0) {
+			laplacianTriplets.emplace_back(
+				static_cast<int>(rowIdx),
+				unknownVarIds[cellIdx],
+				-static_cast<double>(usedNeighborCount));
+		}
+		else {
+			fixedRhs(static_cast<Eigen::Index>(rowIdx)) +=
+				static_cast<double>(usedNeighborCount) *
+				depthCells[cellIdx].distance;
+		}
+	}
+
+	Eigen::SparseMatrix<double> laplacian(rowCount, unknownCount);
+	laplacian.setFromTriplets(
+		laplacianTriplets.begin(),
+		laplacianTriplets.end());
+
+	Eigen::SparseMatrix<double> system =
+		laplacian.transpose() * laplacian;
+	Eigen::VectorXd rhs =
+		laplacian.transpose() * fixedRhs;
+
+	const double regularization =
+		std::max(1e-12, eps * eps);
+	for (uint i = 0; i < unknownIds.size(); ++i) {
+		system.coeffRef(
+			static_cast<Eigen::Index>(i),
+			static_cast<Eigen::Index>(i)) += regularization;
+		rhs(static_cast<Eigen::Index>(i)) +=
+			regularization * depthCells[unknownIds[i]].distance;
+	}
+	system.makeCompressed();
+
+	std::cout << "  biharmonic sparse solve start\n";
+	std::cout.flush();
+
+	Eigen::ConjugateGradient<
+		Eigen::SparseMatrix<double>,
+		Eigen::Lower | Eigen::Upper> solver;
+	solver.setTolerance(1e-8);
+	solver.setMaxIterations(
+		static_cast<int>(std::max<size_t>(1000, unknownIds.size() * 2)));
+	solver.compute(system);
+
+	if (solver.info() != Eigen::Success) {
+		return depthCells;
+	}
+
+	const Eigen::VectorXd solvedDistances = solver.solve(rhs);
+
+	std::cout << "  biharmonic sparse solve done. Iterations: "
+			  << solver.iterations()
+			  << ", error: " << solver.error() << "\n";
+	std::cout.flush();
+
+	if (solver.info() != Eigen::Success) {
+		return depthCells;
+	}
+
+	for (uint i = 0; i < unknownIds.size(); ++i) {
+		const double distance =
+			solvedDistances(static_cast<Eigen::Index>(i));
+
+		if (!std::isfinite(distance)) {
+			continue;
+		}
+
+		CellData& cell = depthCells[unknownIds[i]];
+		cell.distance = distance;
+		cell.hitPoints = {cell.cellCenter + direction * distance};
+
+		if (cell.hasClampedHit) {
+			cell.clampedDistance = distance;
+		}
+	}
+
+	std::cout << "  biharmonic done\n";
+	std::cout.flush();
+
+	return depthCells;
+}
+
 static std::vector<double> pushPull(
 	const std::vector<CellData>& cells,
 	const GridChoice& grid)
@@ -488,18 +762,18 @@ static std::vector<double> pushPull(
 	std::iota(baseIndices.begin(), baseIndices.end(), 0);
 
 	parallelFor(baseIndices, [&](uint i) {
-		if (cells[i].hasHit) {
+		if (cells[i].hasHit && !cells[i].hasClampedHit) {
 			base.distances[i] = cells[i].clampedDistance;
 			base.weights[i] = 1.0;
 		}
 	});
 
-	const uint hitCount = static_cast<uint>(
+	const uint fixedHitCount = static_cast<uint>(
 		std::count_if(cells.begin(), cells.end(), [](const CellData& cell) {
-			return cell.hasHit;
+			return cell.hasHit && !cell.hasClampedHit;
 		}));
 
-	if (hitCount == 0) {
+	if (fixedHitCount == 0) {
 		return base.distances;
 	}
 
@@ -854,12 +1128,21 @@ static std::vector<CellData> makeDepthCells(
 	const std::filesystem::path debugOutputDir =
 			std::filesystem::path(RESULTS_PATH) /
 			debugResultsSubdir;
+
+	std::filesystem::create_directories(debugOutputDir);
 	
 	const std::string base =
 			(debugOutputDir / "mold_check").string();
 	saveMesh(depthPointsMesh, base + "_original_mold_points.ply");
 
 	//depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
+
+	depthCells = biharmonicFillHitCells(
+		depthCells,
+		grid,
+		direction,
+		eps,
+		3);
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 
