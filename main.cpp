@@ -47,21 +47,21 @@ struct MoldCheckMetrics
     double hitRatio = 0.0;
     double compactness = 0.0;
     vcl::uint hitCount = 0;
-    double percentClamped = 0.0;
-    double percentHidden = 0.0;
+    double reduceRatio = 0.0;
+    double hiddenRatio = 0.0;
 };
 
 static double moldQualityScore(
     double hitRatio,
     double compactness,
-    double percentClamped,
-    double percentHidden)
+    double reduceRatio,
+    double hiddenRatio)
 {
     return
         0.35 * hitRatio +
         0.25 * compactness +
-        0.20 * (1 - (percentHidden / 100.0)) +
-        0.20 * (1 - (percentClamped / 100.0));
+        0.20 * (1 - (hiddenRatio)) +
+        0.20 * (1 - (reduceRatio));
 }
 
 static vcl::PolyMesh makeNormalSideCutterVolume(
@@ -173,6 +173,7 @@ MoldCheckMetrics moldCheck(
     bool                       debug,
     vcl::Point3d               direction,
     const double               coneAngleDegrees,
+    const double               draftAngleDegrees,
     const double               marginFactor,
     const std::string&         debugResultsSubdir = "",
     const vcl::PolyMesh*       moldMesh = nullptr)
@@ -251,12 +252,13 @@ MoldCheckMetrics moldCheck(
 
     uint rawHitCount = 0;
 
-    if (debug) {
-        for (uint i = 0; i < cells.size(); ++i) {
-            if (cells[i].hasHit) {
-                ++rawHitCount;
-            }
+    for (uint i = 0; i < cells.size(); ++i) {
+        if (cells[i].hasHit) {
+            ++rawHitCount;
         }
+    }
+
+    if (debug) {
 
         std::cout << "Ray casting complete. Hit cells: "
                   << rawHitCount << "/" << allCells.size() << "\n";
@@ -285,6 +287,9 @@ MoldCheckMetrics moldCheck(
     cells = reducePoints(
         cells,
         grid,
+        direction,
+        draftAngleDegrees,
+        EPS,
         REDUCE_POINTS_DISTANCE_THRESHOLD);
 
     double totalAreaHit = 0.0;
@@ -311,12 +316,17 @@ MoldCheckMetrics moldCheck(
 
     const double percentClamped =
         (totalAreaHit > 0.0) ?
-            (clampedAreaHit / totalAreaHit) * 100.0 :
+            (clampedAreaHit / totalAreaHit):
             0.0;
 
-    const double percentHidden =
+    const double reduceRatio = 
+        (rawHitCount > 0) ?
+            (reducedHitCount / static_cast<double>(rawHitCount)):
+            0.0;
+
+    const double hiddenRatio =
         (totalAreaHit > 0.0) ?
-            (hiddenAreaHit / totalAreaHit) * 100.0 :
+            (hiddenAreaHit / totalAreaHit):
             0.0;
 
     const HitCellShapeData hitShape = hitCellShape(cells, grid);
@@ -330,13 +340,13 @@ MoldCheckMetrics moldCheck(
         moldQualityScore(
             hitRatio,
             hitShape.compactness,
-            percentClamped,
-            percentHidden),
+            reduceRatio,
+            hiddenRatio),
         hitRatio,
         hitShape.compactness,
         reducedHitCount,
-        percentClamped,
-        percentHidden};
+        reduceRatio,
+        hiddenRatio};
 
     if (debug) {
         std::cout << "Clamping and reduction complete. Hit cells after reduction: "
@@ -528,8 +538,10 @@ MoldCheckMetrics moldCheck(
                   << percentClamped << "\n";
         std::cout << "hiddenAreaHit: "
                   << hiddenAreaHit << "\n";
-        std::cout << "percentHidden: "
-                  << percentHidden << "\n";
+        std::cout << "hiddenRatio: "
+                  << hiddenRatio << "\n";
+        std::cout << "reduceRatio: "
+                  << reduceRatio << "\n";
         std::cout << "hitRatio: "
                   << hitRatio << "\n";
         std::cout << "hitCount: "
@@ -642,7 +654,7 @@ int main()
         sphericalFibonacciPointSet<Point3d>(NUM_PLANES);
 
     PolyMesh m =
-        loadMesh<PolyMesh>(MESHES_PATH "/bimba_enlarged.ply");
+        loadMesh<PolyMesh>(MESHES_PATH "/bunny_enlarged.ply");
 
     const PolyMesh moldMesh =
         makeContainingBoxMesh(m, marginFactor);
@@ -652,6 +664,7 @@ int main()
     std::vector<double> gridCellSideLengths = {0.4, 0.4};
 
     const double coneAngleDegrees = 5.0;
+    const double draftAngleDegrees = 20.0;
 
     MoldCheckMetrics result;
     MoldCheckMetrics bestResult;
@@ -678,6 +691,7 @@ int main()
                 false,
                 direction,
                 coneAngleDegrees,
+                draftAngleDegrees,
                 marginFactor);
 
         scoredDirections.push_back(
@@ -687,8 +701,8 @@ int main()
                   << " (hit ratio: " << result.hitRatio
                   << ", compactness: " << result.compactness
                   << ", hits: " << result.hitCount
-                  << ", clamped: " << result.percentClamped << "%"
-                  << ", hidden: " << result.percentHidden << "%)\n";
+                  << ", reduced: " << result.reduceRatio
+                  << ", hidden: " << result.hiddenRatio << ")\n";
 
         if (result.score > bestResult.score) {
             bestResult = result;
@@ -720,6 +734,21 @@ int main()
             return a.first < b.first;
         });
 
+    if (!fibNormals.empty()) {
+        std::cout << "Processing debug direction 0\n";
+        result =
+            moldCheck(
+                m,
+                gridCellSideLengths,
+                true,
+                fibNormals[0],
+                coneAngleDegrees,
+                draftAngleDegrees,
+                marginFactor,
+                "direction_0",
+                &moldMesh);
+    }
+
     result =
         moldCheck(
             m,
@@ -727,6 +756,7 @@ int main()
             true,
             fibNormals[bestDirectionIndex],
             coneAngleDegrees,
+            draftAngleDegrees,
             marginFactor,
             "best",
             &moldMesh);
@@ -738,6 +768,7 @@ int main()
             true,
             fibNormals[worstDirectionIndex],
             coneAngleDegrees,
+            draftAngleDegrees,
             marginFactor,
             "worst",
             &moldMesh);
@@ -784,6 +815,7 @@ int main()
                 true,
                 fibNormals[medianDirectionIndex],
                 coneAngleDegrees,
+                draftAngleDegrees,
                 marginFactor,
                 medianDir,
                 &moldMesh);

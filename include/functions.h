@@ -373,9 +373,96 @@ static std::vector<CellData> keepClampedCellsConnectedToCandidates(
 	return cells;
 }
 
+static void removeDraftAngleBoundaryPoints(
+	std::vector<CellData>& cells,
+	const GridChoice& grid,
+	const vcl::Point3d& direction,
+	double draftAngleDegrees,
+	float eps)
+{
+	using namespace vcl;
+
+	if (cells.size() != grid.rows * grid.cols ||
+		draftAngleDegrees <= 0.0 || direction.norm() == 0.0) {
+		return;
+	}
+
+	Point3d normalizedDirection = direction;
+	normalizedDirection.normalize();
+	const double coneCosThreshold =
+		std::cos(draftAngleDegrees * M_PI / 180.0);
+
+	std::vector<uint> allCells(cells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+	std::vector<char> removeCell(cells.size(), false);
+	std::atomic<bool> removedAny = false;
+
+	do {
+		removedAny.store(false, std::memory_order_relaxed);
+		std::fill(removeCell.begin(), removeCell.end(), false);
+
+		parallelFor(allCells, [&](uint idx) {
+			if (!cells[idx].hasHit || cells[idx].hasClampedHit ||
+				cells[idx].hitPoints.empty()) {
+				return;
+			}
+
+			bool isBoundary = false;
+			for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
+				const CellData& neighbor = cells[neighborIdx];
+				if (!neighbor.hasHit || neighbor.hasClampedHit) {
+					isBoundary = true;
+					break;
+				}
+			}
+
+			if (!isBoundary) {
+				return;
+			}
+
+			const Point3d& hitPoint = cells[idx].hitPoints[0];
+			for (uint otherIdx = 0; otherIdx < cells.size(); ++otherIdx) {
+				if (otherIdx == idx) {
+					continue;
+				}
+
+				const CellData& other = cells[otherIdx];
+				if ((!other.hasHit && !other.hasClampedHit) ||
+					other.hitPoints.empty()) {
+					continue;
+				}
+
+				const Point3d otherPoint = other.hasClampedHit ?
+					other.cellCenter +
+						normalizedDirection * other.clampedDistance :
+					other.hitPoints[0];
+				if (isWithinPlaneAngle(
+						hitPoint,
+						otherPoint,
+						normalizedDirection,
+						coneCosThreshold,
+						eps)) {
+					removeCell[idx] = true;
+					break;
+				}
+			}
+		});
+
+		parallelFor(allCells, [&](uint idx) {
+			if (removeCell[idx]) {
+				cells[idx].hasHit = false;
+				removedAny.store(true, std::memory_order_relaxed);
+			}
+		});
+	} while (removedAny.load(std::memory_order_relaxed));
+}
+
 static std::vector<CellData> reducePoints(
 	std::vector<CellData> cells,
 	const GridChoice& grid,
+	const vcl::Point3d& direction,
+	double draftAngleDegrees,
+	float eps,
 	double distanceThreshold = std::numeric_limits<double>::infinity())
 {
 	using namespace vcl;
@@ -397,11 +484,27 @@ static std::vector<CellData> reducePoints(
 	dilateHitMaskOnce(candidateCells, grid);
 	dilateHitMaskOnce(candidateCells, grid);
 
-	const std::vector<std::vector<uint>> connectedNeighbors =
+	std::vector<std::vector<uint>> connectedNeighbors =
 		removeDistanceJumpPoints(
 			candidateCells,
 			grid,
 			distanceThreshold);
+
+	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
+
+	removeDraftAngleBoundaryPoints(
+		candidateCells,
+		grid,
+		direction,
+		draftAngleDegrees,
+		eps);
+
+	erodeHitMaskOnce(candidateCells, grid);
+	erodeHitMaskOnce(candidateCells, grid);
+	erodeHitMaskOnce(candidateCells, grid);
+	dilateHitMaskOnce(candidateCells, grid);
+	dilateHitMaskOnce(candidateCells, grid);
+	dilateHitMaskOnce(candidateCells, grid);
 
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
@@ -537,7 +640,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 			collarRadius > 0 &&
 			isNearHitCell(idx, collarRadius);
 
-		if (!depthCells[idx].hasHit && !isMovableBorder) {
+		if (depthCells[idx].hasClampedHit ||
+			(!depthCells[idx].hasHit && !isMovableBorder)) {
 			continue;
 		}
 
@@ -559,27 +663,49 @@ static std::vector<CellData> biharmonicFillHitCells(
 		const uint col = idx % grid.cols;
 		bool touchesUnknown = false;
 
-		const int minRow =
-			std::max<int>(0, static_cast<int>(row) - static_cast<int>(collarRadius));
-		const int maxRow =
-			std::min<int>(
+		if (collarRadius == 0) {
+			const auto checkNeighbor = [&](uint neighborIdx) {
+				if (unknownVarIds[neighborIdx] >= 0) {
+					touchesUnknown = true;
+				}
+			};
+
+			if (col > 0) {
+				checkNeighbor(idx - 1);
+			}
+			if (!touchesUnknown && col + 1 < grid.cols) {
+				checkNeighbor(idx + 1);
+			}
+			if (!touchesUnknown && row > 0) {
+				checkNeighbor(idx - grid.cols);
+			}
+			if (!touchesUnknown && row + 1 < grid.rows) {
+				checkNeighbor(idx + grid.cols);
+			}
+		}
+		else {
+			const int minRow = std::max<int>(
+				0,
+				static_cast<int>(row) - static_cast<int>(collarRadius));
+			const int maxRow = std::min<int>(
 				static_cast<int>(grid.rows) - 1,
 				static_cast<int>(row) + static_cast<int>(collarRadius));
-		const int minCol =
-			std::max<int>(0, static_cast<int>(col) - static_cast<int>(collarRadius));
-		const int maxCol =
-			std::min<int>(
+			const int minCol = std::max<int>(
+				0,
+				static_cast<int>(col) - static_cast<int>(collarRadius));
+			const int maxCol = std::min<int>(
 				static_cast<int>(grid.cols) - 1,
 				static_cast<int>(col) + static_cast<int>(collarRadius));
 
-		for (int r = minRow; r <= maxRow && !touchesUnknown; ++r) {
-			for (int c = minCol; c <= maxCol; ++c) {
-				const uint neighborIdx =
-					static_cast<uint>(r) * grid.cols +
-					static_cast<uint>(c);
-				if (unknownVarIds[neighborIdx] >= 0) {
-					touchesUnknown = true;
-					break;
+			for (int r = minRow; r <= maxRow && !touchesUnknown; ++r) {
+				for (int c = minCol; c <= maxCol; ++c) {
+					const uint neighborIdx =
+						static_cast<uint>(r) * grid.cols +
+						static_cast<uint>(c);
+					if (unknownVarIds[neighborIdx] >= 0) {
+						touchesUnknown = true;
+						break;
+					}
 				}
 			}
 		}
@@ -595,7 +721,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 	}
 
 	std::cout << "  biharmonic unknown cells: " << unknownIds.size()
-			  << ", fixed collar cells: " << fixedIds.size() << "\n";
+			  << ", fixed anchor cells: " << fixedIds.size() << "\n";
 	std::cout.flush();
 
 	std::vector<uint> laplacianRowCellIds = unknownIds;
@@ -1135,14 +1261,12 @@ static std::vector<CellData> makeDepthCells(
 			(debugOutputDir / "mold_check").string();
 	saveMesh(depthPointsMesh, base + "_original_mold_points.ply");
 
-	//depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
-
 	depthCells = biharmonicFillHitCells(
 		depthCells,
 		grid,
 		direction,
 		eps,
-		3);
+		0);
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 
