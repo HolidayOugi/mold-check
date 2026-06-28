@@ -632,6 +632,9 @@ static std::vector<CellData> biharmonicFillHitCells(
 
 	std::vector<int> unknownVarIds(depthCells.size(), -1);
 	std::vector<char> isFixedCollar(depthCells.size(), false);
+	std::vector<double> minRedHitDistances(
+		depthCells.size(),
+		-std::numeric_limits<double>::infinity());
 	std::vector<uint> unknownIds;
 	std::vector<uint> fixedIds;
 	unknownIds.reserve(depthCells.size());
@@ -639,6 +642,15 @@ static std::vector<CellData> biharmonicFillHitCells(
 	for (uint idx = 0; idx < depthCells.size(); ++idx) {
 		if (!std::isfinite(depthCells[idx].distance)) {
 			continue;
+		}
+
+		if (depthCells[idx].hasHit && !depthCells[idx].hasClampedHit) {
+			minRedHitDistances[idx] = depthCells[idx].distance;
+			if (!depthCells[idx].hitPoints.empty()) {
+				minRedHitDistances[idx] =
+					(depthCells[idx].hitPoints[0] -
+					 depthCells[idx].cellCenter).dot(direction);
+			}
 		}
 
 		const bool isMovableBorder =
@@ -862,11 +874,13 @@ static std::vector<CellData> biharmonicFillHitCells(
 		}
 
 		CellData& cell = depthCells[unknownIds[i]];
-		cell.distance = distance;
-		cell.hitPoints = {cell.cellCenter + direction * distance};
+		cell.distance = std::max(
+			distance,
+			minRedHitDistances[unknownIds[i]]);
+		cell.hitPoints = {cell.cellCenter + direction * cell.distance};
 
 		if (cell.hasClampedHit) {
-			cell.clampedDistance = distance;
+			cell.clampedDistance = cell.distance;
 		}
 	}
 
