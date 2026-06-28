@@ -508,11 +508,17 @@ static std::vector<CellData> reducePoints(
 
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
-	return keepClampedCellsConnectedToCandidates(
-		cells,
-		candidateCells,
-		grid,
-		distanceThreshold);
+	candidateCells = cutProtrusionsWithChords(candidateCells, grid);
+
+	std::vector<CellData> reducedCells = cells;
+	parallelFor(allCells, [&](uint idx) {
+		if (!candidateCells[idx].hasHit) {
+			reducedCells[idx].hasHit = false;
+			reducedCells[idx].hasClampedHit = false;
+		}
+	});
+
+	return reducedCells;
 }
 
 

@@ -654,7 +654,7 @@ int main()
         sphericalFibonacciPointSet<Point3d>(NUM_PLANES);
 
     PolyMesh m =
-        loadMesh<PolyMesh>(MESHES_PATH "/bunny_enlarged.ply");
+        loadMesh<PolyMesh>(MESHES_PATH "/bimba_enlarged.ply");
 
     const PolyMesh moldMesh =
         makeContainingBoxMesh(m, marginFactor);
