@@ -486,19 +486,11 @@ static std::vector<CellData> reducePoints(
 	dilateHitMaskOnce(candidateCells, grid);
 
 	std::vector<std::vector<uint>> connectedNeighbors =
-		removeDistanceJumpPoints(
-			candidateCells,
-			grid,
-			distanceThreshold);
+		removeDistanceJumpPoints(candidateCells,grid, distanceThreshold);
 
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
-	removeDraftAngleBoundaryPoints(
-		candidateCells,
-		grid,
-		direction,
-		draftAngleDegrees,
-		eps);
+	removeDraftAngleBoundaryPoints(candidateCells, grid, direction, draftAngleDegrees,eps);
 
 	erodeHitMaskOnce(candidateCells, grid);
 	erodeHitMaskOnce(candidateCells, grid);
@@ -509,7 +501,7 @@ static std::vector<CellData> reducePoints(
 
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
-	candidateCells = cutProtrusions(candidateCells, grid, maxDistance);
+	candidateCells = cutProtrusions(candidateCells, grid, maxDistance, connectedNeighbors);
 
 	std::vector<CellData> reducedCells = cells;
 	parallelFor(allCells, [&](uint idx) {

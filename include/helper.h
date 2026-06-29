@@ -460,41 +460,6 @@ static std::vector<CellData> keepLargestHitComponent(
 	return result;
 }
 
-static std::vector<std::vector<vcl::uint>> hitGridConnectedNeighbors(
-	const std::vector<CellData>& cells,
-	const GridChoice& grid)
-{
-	using namespace vcl;
-
-	std::vector<std::vector<uint>> connectedNeighbors(cells.size());
-	for (uint idx = 0; idx < cells.size(); ++idx) {
-		if (!cells[idx].hasHit) {
-			continue;
-		}
-
-		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
-			if (neighborIdx <= idx || !cells[neighborIdx].hasHit) {
-				continue;
-			}
-
-			connectedNeighbors[idx].push_back(neighborIdx);
-			connectedNeighbors[neighborIdx].push_back(idx);
-		}
-	}
-
-	return connectedNeighbors;
-}
-
-static std::vector<CellData> keepLargestGridHitComponent(
-	const std::vector<CellData>& cells,
-	const GridChoice& grid)
-{
-	const std::vector<std::vector<vcl::uint>> connectedNeighbors =
-		hitGridConnectedNeighbors(cells, grid);
-
-	return keepLargestHitComponent(cells, connectedNeighbors);
-}
-
 static bool isBoundaryHitCell(
 	const std::vector<CellData>& cells,
 	const GridChoice& grid,
@@ -741,7 +706,8 @@ struct ChordCutCandidate
 static std::vector<CellData> cutProtrusions(
 	std::vector<CellData> cells,
 	const GridChoice& grid,
-	double maxDistance)
+	double maxDistance,
+	std::vector<std::vector<vcl::uint>> connectedNeighbors)
 {
 	using namespace vcl;
 
@@ -878,7 +844,7 @@ static std::vector<CellData> cutProtrusions(
 		cells = applyLineCutAndKeepLargest(cells, grid, bestLine);
 	}
 
-	return keepLargestGridHitComponent(cells, grid);
+	return keepLargestHitComponent(cells, connectedNeighbors);
 }
 
 static double interpolateFromCoarseLevel(
