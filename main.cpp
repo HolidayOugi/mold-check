@@ -646,7 +646,8 @@ int main()
 
     std::filesystem::create_directories(RESULTS_PATH);
 
-	const double marginFactor = 0.05;
+    //bigger than boxMesh for it to completely encapsulate the mold mesh
+	const double marginFactor = 0.2;
     const uint NUM_PLANES = 100;
 
     std::vector<Point3d> fibNormals =
@@ -656,7 +657,7 @@ int main()
         loadMesh<PolyMesh>(MESHES_PATH "/bimba_enlarged.ply");
 
     const PolyMesh moldMesh =
-        makeContainingBoxMesh(m, marginFactor);
+        makeContainingBoxMesh(m, 0.05);
 
     saveMesh(moldMesh, RESULTS_PATH "/mold-bool.ply");
 
