@@ -463,7 +463,8 @@ static std::vector<CellData> reducePoints(
 	const vcl::Point3d& direction,
 	double draftAngleDegrees,
 	float eps,
-	double distanceThreshold = std::numeric_limits<double>::infinity())
+	double distanceThreshold,
+	double maxDistance)
 {
 	using namespace vcl;
 
@@ -508,7 +509,7 @@ static std::vector<CellData> reducePoints(
 
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
-	candidateCells = cutProtrusionsWithChords(candidateCells, grid);
+	candidateCells = cutProtrusions(candidateCells, grid, maxDistance);
 
 	std::vector<CellData> reducedCells = cells;
 	parallelFor(allCells, [&](uint idx) {

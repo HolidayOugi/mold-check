@@ -198,8 +198,6 @@ MoldCheckMetrics moldCheck(
 
     direction.normalize();
 
-	const PolyMesh& extentMesh = (debug && moldMesh != nullptr) ? *moldMesh : m;
-
     double minProj = std::numeric_limits<double>::infinity();
     for (const auto& vv : m.vertices()) {
         minProj = std::min(minProj, vv.position().dot(direction));
@@ -212,7 +210,7 @@ MoldCheckMetrics moldCheck(
     GridChoice grid;
 
     const auto [u, v] = makePlane(
-        extentMesh,
+        m,
         plane,
         planePoint,
         direction,
@@ -290,7 +288,8 @@ MoldCheckMetrics moldCheck(
         direction,
         draftAngleDegrees,
         EPS,
-        REDUCE_POINTS_DISTANCE_THRESHOLD);
+        REDUCE_POINTS_DISTANCE_THRESHOLD,
+        MAX_DISTANCE);
 
     double totalAreaHit = 0.0;
     double clampedAreaHit = 0.0;

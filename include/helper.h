@@ -738,9 +738,10 @@ struct ChordCutCandidate
 	double length = 0.0;
 };
 
-static std::vector<CellData> cutProtrusionsWithChords(
+static std::vector<CellData> cutProtrusions(
 	std::vector<CellData> cells,
-	const GridChoice& grid)
+	const GridChoice& grid,
+	double maxDistance)
 {
 	using namespace vcl;
 
@@ -751,17 +752,9 @@ static std::vector<CellData> cutProtrusionsWithChords(
 	for (CellData& cell : cells) {
 		cell.hasHit = cell.hasHit && !cell.hasClampedHit;
 	}
-
-	cells = keepLargestGridHitComponent(cells, grid);
-
-	const double gridDiagonal =
-		std::sqrt(
-			std::pow(static_cast<double>(grid.cols) * grid.sideU, 2.0) +
-			std::pow(static_cast<double>(grid.rows) * grid.sideV, 2.0));
-	const double cellDiagonal =
-		std::sqrt(grid.sideU * grid.sideU + grid.sideV * grid.sideV);
-	const double minChordLength = 3.0 * cellDiagonal;
-	const double maxChordLength = 0.14 * gridDiagonal;
+	
+	const double minChordLength =  0.1 * maxDistance;
+	const double maxChordLength = 0.25 * maxDistance; ;
 	const double maxRemovedAreaRatio = 0.04;
 	const double minCompactnessGain = 0.006;
 	const double minScore = 0.002;
@@ -774,7 +767,8 @@ static std::vector<CellData> cutProtrusionsWithChords(
 		if (beforeShape.area <= 0.0 || beforeShape.perimeter <= 0.0) {
 			break;
 		}
-
+		
+		//get boundary cells
 		const std::vector<uint> boundary = boundaryHitCells(cells, grid);
 		if (boundary.size() < 2) {
 			break;
@@ -788,11 +782,14 @@ static std::vector<CellData> cutProtrusionsWithChords(
 						static_cast<double>(boundary.size()) /
 						static_cast<double>(maxBoundarySamples))));
 		std::vector<uint> sampledBoundary;
+		//sample boundary cells
 		for (uint i = 0; i < boundary.size(); i += boundaryStride) {
 			sampledBoundary.push_back(boundary[i]);
 		}
 
 		std::vector<ChordCutCandidate> candidates;
+		//for each pair of sampled cells, save possible chords to cut
+		//chords are bounded by a min and max length
 		for (uint i = 0; i < sampledBoundary.size(); ++i) {
 			for (uint j = i + 1; j < sampledBoundary.size(); ++j) {
 				const double chordLength =
@@ -823,9 +820,10 @@ static std::vector<CellData> cutProtrusionsWithChords(
 			if (evaluatedCandidates >= maxEvaluatedCandidates) {
 				break;
 			}
-
+			//get line between candidate cells
 			const std::vector<uint> line =
 				rasterizedGridSegment(candidate.a, candidate.b, grid);
+			//avoid lines with !cell.hasHit
 			if (!lineInsideHitMask(cells, line)) {
 				continue;
 			}
@@ -842,7 +840,8 @@ static std::vector<CellData> cutProtrusionsWithChords(
 			if (afterShape.area <= 0.0 || afterShape.area >= beforeShape.area) {
 				continue;
 			}
-
+			
+			//reject if it removes too much
 			const double removedAreaRatio =
 				(beforeShape.area - afterShape.area) / beforeShape.area;
 			if (removedAreaRatio <= 0.0 ||
@@ -850,6 +849,7 @@ static std::vector<CellData> cutProtrusionsWithChords(
 				continue;
 			}
 
+			//reject if it does not improve compactness enough
 			const double compactnessGain =
 				afterShape.compactness - beforeShape.compactness;
 			if (compactnessGain < minCompactnessGain) {
@@ -873,7 +873,8 @@ static std::vector<CellData> cutProtrusionsWithChords(
 		if (bestLine.empty()) {
 			break;
 		}
-
+		
+		//apply cut
 		cells = applyLineCutAndKeepLargest(cells, grid, bestLine);
 	}
 
