@@ -499,6 +499,12 @@ MoldCheckMetrics moldCheck(
         saveMesh(moldSurfaceMesh, base + "_mold_surface.ply");
         saveMesh(violatingPointsMesh, base + "_non-lipschitz_points.ply");
 
+        if (moldSurfaceCutterVolume.faceCount() > 0) {
+            saveMesh(
+                moldSurfaceCutterVolume,
+                base + "_mold_surface_cutter_volume.ply");
+        }
+
         if (hasMoldNormalSidePiece) {
             saveMesh(
                 moldNormalSidePiece,
@@ -555,6 +561,7 @@ MoldCheckMetrics moldCheck(
                   << " - " << base << "_mold_points.ply\n"
                   << " - " << base << "_plane_tested.ply\n"
                   << " - " << base << "_mold_surface.ply\n"
+                  << " - " << base << "_mold_surface_cutter_volume.ply\n"
                   << " - " << base << "_non-lipschitz_points.ply\n";
 
         if (hasMoldNormalSidePiece) {
