@@ -243,47 +243,45 @@ static HitCellShapeData hitCellShape(
 	return result;
 }
 
-static std::vector<vcl::uint> crossNeighborIndices(
+template<typename Func>
+static bool forEachCrossNeighbor(
 	vcl::uint idx,
-	const GridChoice& grid)
+	const GridChoice& grid,
+	Func&& func)
 {
 	using namespace vcl;
 
 	const uint row = idx / grid.cols;
 	const uint col = idx % grid.cols;
 
-	std::vector<uint> neighbors;
-	neighbors.reserve(4);
-
-	if (col > 0) {
-		neighbors.push_back(idx - 1);
+	if (col > 0 && !func(idx - 1)) {
+		return false;
 	}
-	if (col + 1 < grid.cols) {
-		neighbors.push_back(idx + 1);
+	if (col + 1 < grid.cols && !func(idx + 1)) {
+		return false;
 	}
-	if (row > 0) {
-		neighbors.push_back(idx - grid.cols);
+	if (row > 0 && !func(idx - grid.cols)) {
+		return false;
 	}
-	if (row + 1 < grid.rows) {
-		neighbors.push_back(idx + grid.cols);
+	if (row + 1 < grid.rows && !func(idx + grid.cols)) {
+		return false;
 	}
 
-	return neighbors;
+	return true;
 }
 
-static std::vector<vcl::uint> squareNeighborIndices(
+template<typename Func>
+static bool forEachSquareNeighbor(
 	vcl::uint idx,
 	const GridChoice& grid,
-	vcl::uint squareSize)
+	vcl::uint squareSize,
+	Func&& func)
 {
 	using namespace vcl;
 
 	const uint centerRow = idx / grid.cols;
 	const uint centerCol = idx % grid.cols;
 	const int radius = static_cast<int>(squareSize / 2);
-
-	std::vector<uint> neighbors;
-	neighbors.reserve(squareSize * squareSize - 1);
 
 	for (int rowOffset = -radius; rowOffset <= radius; ++rowOffset) {
 		for (int colOffset = -radius; colOffset <= radius; ++colOffset) {
@@ -301,11 +299,48 @@ static std::vector<vcl::uint> squareNeighborIndices(
 				continue;
 			}
 
-			neighbors.push_back(
-				static_cast<uint>(row) * grid.cols +
-				static_cast<uint>(col));
+			if (!func(
+					static_cast<uint>(row) * grid.cols +
+					static_cast<uint>(col))) {
+				return false;
+			}
 		}
 	}
+
+	return true;
+}
+
+static std::vector<vcl::uint> crossNeighborIndices(
+	vcl::uint idx,
+	const GridChoice& grid)
+{
+	using namespace vcl;
+
+	std::vector<uint> neighbors;
+	neighbors.reserve(4);
+
+	forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
+		neighbors.push_back(neighborIdx);
+		return true;
+	});
+
+	return neighbors;
+}
+
+static std::vector<vcl::uint> squareNeighborIndices(
+	vcl::uint idx,
+	const GridChoice& grid,
+	vcl::uint squareSize)
+{
+	using namespace vcl;
+
+	std::vector<uint> neighbors;
+	neighbors.reserve(squareSize * squareSize - 1);
+
+	forEachSquareNeighbor(idx, grid, squareSize, [&](uint neighborIdx) {
+		neighbors.push_back(neighborIdx);
+		return true;
+	});
 
 	return neighbors;
 }
@@ -326,12 +361,13 @@ static void erodeHitMaskOnce(
 		}
 
 		bool keep = true;
-		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
+		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
 			if (!cells[neighborIdx].hasHit) {
 				keep = false;
-				break;
+				return false;
 			}
-		}
+			return true;
+		});
 
 		nextHasHit[idx] = keep;
 	});
@@ -353,12 +389,13 @@ static void dilateHitMaskOnce(
 
 	parallelFor(allCells, [&](uint idx) {
 		bool add = cells[idx].hasHit;
-		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
+		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
 			if (cells[neighborIdx].hasHit) {
 				add = true;
-				break;
+				return false;
 			}
-		}
+			return true;
+		});
 
 		nextHasHit[idx] = add;
 	});
@@ -385,9 +422,9 @@ static std::vector<std::vector<vcl::uint>> removeDistanceJumpPoints(
 			continue;
 		}
 
-		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
+		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
 			if (neighborIdx <= idx || !cells[neighborIdx].hasHit) {
-				continue;
+				return true;
 			}
 
 			if (std::abs(cells[idx].distance - cells[neighborIdx].distance) <=
@@ -395,7 +432,8 @@ static std::vector<std::vector<vcl::uint>> removeDistanceJumpPoints(
 				connectedNeighbors[idx].push_back(neighborIdx);
 				connectedNeighbors[neighborIdx].push_back(idx);
 			}
-		}
+			return true;
+		});
 	}
 
 	return connectedNeighbors;
@@ -447,12 +485,15 @@ static std::vector<CellData> keepLargestHitComponent(
 		return cells;
 	}
 
-	std::unordered_set<uint> keep(
-		largestComponent.begin(), largestComponent.end());
+	std::vector<char> keep(cells.size(), false);
+	for (uint idx : largestComponent) {
+		keep[idx] = true;
+	}
+
 	std::vector<CellData> result = cells;
 
 	for (uint idx = 0; idx < result.size(); ++idx) {
-		if (result[idx].hasHit && keep.count(idx) == 0) {
+		if (result[idx].hasHit && !keep[idx]) {
 			result[idx].hasHit = false;
 		}
 	}
@@ -479,13 +520,16 @@ static bool isBoundaryHitCell(
 		return true;
 	}
 
-	for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
+	bool hasEmptyNeighbor = false;
+	forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
 		if (!cells[neighborIdx].hasHit) {
-			return true;
+			hasEmptyNeighbor = true;
+			return false;
 		}
-	}
+		return true;
+	});
 
-	return false;
+	return hasEmptyNeighbor;
 }
 
 static std::vector<vcl::uint> boundaryHitCells(
@@ -523,6 +567,9 @@ static std::vector<vcl::uint> rasterizedGridSegment(
 	int err = dCol + dRow;
 
 	std::vector<uint> line;
+	line.reserve(
+		static_cast<size_t>(
+			std::max(std::abs(col1 - col0), std::abs(row1 - row0)) + 1));
 	while (true) {
 		if (row0 >= 0 && col0 >= 0 &&
 			row0 < static_cast<int>(grid.rows) &&
@@ -616,14 +663,15 @@ static HitCellShapeData largestUnblockedHitComponentShape(
 			stack.pop_back();
 			component.push_back(idx);
 
-			for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
+			forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
 				if (!visited[neighborIdx] &&
 					!blocked[neighborIdx] &&
 					cells[neighborIdx].hasHit) {
 					visited[neighborIdx] = true;
 					stack.push_back(neighborIdx);
 				}
-			}
+				return true;
+			});
 		}
 
 		if (component.size() > largestComponent.size()) {
@@ -748,12 +796,16 @@ static std::vector<CellData> cutProtrusions(
 						static_cast<double>(boundary.size()) /
 						static_cast<double>(maxBoundarySamples))));
 		std::vector<uint> sampledBoundary;
+		sampledBoundary.reserve(
+			(boundary.size() + boundaryStride - 1) / boundaryStride);
 		//sample boundary cells
 		for (uint i = 0; i < boundary.size(); i += boundaryStride) {
 			sampledBoundary.push_back(boundary[i]);
 		}
 
 		std::vector<ChordCutCandidate> candidates;
+		candidates.reserve(
+			sampledBoundary.size() * (sampledBoundary.size() - 1) / 2);
 		//for each pair of sampled cells, save possible chords to cut
 		//chords are bounded by a min and max length
 		for (uint i = 0; i < sampledBoundary.size(); ++i) {

@@ -239,6 +239,7 @@ static CellData makeCellGeometry(
 static void computeClampedCell(
 	vcl::uint i,
 	std::vector<CellData>& cells,
+	const std::vector<vcl::uint>& hitCellIds,
 	const vcl::Point3d& planePoint,
 	const vcl::Point3d& direction,
 	double coneCosThreshold,
@@ -259,8 +260,8 @@ static void computeClampedCell(
 	double requiredT = 0.0;
 	bool anyCone = false;
 
-	for (uint j = 0; j < cells.size(); ++j) {
-		if (i == j || !cells[j].hasHit) {
+	for (uint j : hitCellIds) {
+		if (i == j) {
 			continue;
 		}
 
@@ -330,9 +331,9 @@ static std::vector<CellData> keepClampedCellsConnectedToCandidates(
 		const uint idx = stack.back();
 		stack.pop_back();
 
-		for (uint neighborIdx : crossNeighborIndices(idx, grid)) {
+		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
 			if (keepCells[neighborIdx]) {
-				continue;
+				return true;
 			}
 
 			const bool canKeep =
@@ -341,12 +342,13 @@ static std::vector<CellData> keepClampedCellsConnectedToCandidates(
 				 cells[neighborIdx].hasClampedHit);
 
 			if (!canKeep) {
-				continue;
+				return true;
 			}
 
 			keepCells[neighborIdx] = true;
 			stack.push_back(neighborIdx);
-		}
+			return true;
+		});
 	}
 
 	std::vector<CellData> filteredCells = cells;
@@ -398,9 +400,35 @@ static void removeDraftAngleBoundaryPoints(
 	std::vector<char> removeCell(cells.size(), false);
 	std::atomic<bool> removedAny = false;
 
+	struct DraftAnglePoint
+	{
+		uint idx = 0;
+		Point3d point;
+	};
+
 	do {
 		removedAny.store(false, std::memory_order_relaxed);
 		std::fill(removeCell.begin(), removeCell.end(), false);
+
+		//precompute the points to compare against for efficiency
+		std::vector<DraftAnglePoint> comparisonPoints;
+		comparisonPoints.reserve(cells.size());
+		for (uint otherIdx = 0; otherIdx < cells.size(); ++otherIdx) {
+			const CellData& other = cells[otherIdx];
+			if ((!other.hasHit && !other.hasClampedHit) ||
+				other.hitPoints.empty()) {
+				continue;
+			}
+
+			comparisonPoints.push_back(
+				{
+					otherIdx,
+					other.hasClampedHit ?
+						other.cellCenter +
+							normalizedDirection * other.clampedDistance :
+						other.hitPoints[0]
+				});
+		}
 
 		parallelFor(allCells, [&](uint idx) {
 			if (!cells[idx].hasHit || cells[idx].hasClampedHit ||
@@ -409,37 +437,28 @@ static void removeDraftAngleBoundaryPoints(
 			}
 
 			bool isBoundary = false;
-			for (uint neighborIdx : squareNeighborIndices(idx, grid, 3)) {
+			forEachSquareNeighbor(idx, grid, 3, [&](uint neighborIdx) {
 				const CellData& neighbor = cells[neighborIdx];
 				if (!neighbor.hasHit || neighbor.hasClampedHit) {
 					isBoundary = true;
-					break;
+					return false;
 				}
-			}
+				return true;
+			});
 
 			if (!isBoundary) {
 				return;
 			}
 
 			const Point3d& hitPoint = cells[idx].hitPoints[0];
-			for (uint otherIdx = 0; otherIdx < cells.size(); ++otherIdx) {
-				if (otherIdx == idx) {
+			for (const DraftAnglePoint& other : comparisonPoints) {
+				if (other.idx == idx) {
 					continue;
 				}
 
-				const CellData& other = cells[otherIdx];
-				if ((!other.hasHit && !other.hasClampedHit) ||
-					other.hitPoints.empty()) {
-					continue;
-				}
-
-				const Point3d otherPoint = other.hasClampedHit ?
-					other.cellCenter +
-						normalizedDirection * other.clampedDistance :
-					other.hitPoints[0];
 				if (isWithinPlaneAngle(
 						hitPoint,
-						otherPoint,
+						other.point,
 						normalizedDirection,
 						coneCosThreshold,
 						eps)) {

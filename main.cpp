@@ -249,10 +249,13 @@ MoldCheckMetrics moldCheck(
     });
 
     uint rawHitCount = 0;
+    std::vector<uint> hitCellIds;
+    hitCellIds.reserve(cells.size());
 
     for (uint i = 0; i < cells.size(); ++i) {
         if (cells[i].hasHit) {
             ++rawHitCount;
+            hitCellIds.push_back(i);
         }
     }
 
@@ -268,6 +271,7 @@ MoldCheckMetrics moldCheck(
         computeClampedCell(
             idx,
             cells,
+            hitCellIds,
             planePoint,
             direction,
             CONE_COS_THRESHOLD,
