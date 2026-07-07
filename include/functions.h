@@ -597,9 +597,10 @@ static std::vector<CellData> biharmonicFillHitCells(
 		return depthCells;
 	}
 
-	const auto isNearHitCell = [&](uint idx, uint radius) {
+	const auto nearestHitCellDistance = [&](uint idx, uint radius) {
 		const uint row = idx / grid.cols;
 		const uint col = idx % grid.cols;
+		uint nearestDistance = radius + 1;
 
 		const int minRow =
 			std::max<int>(0, static_cast<int>(row) - static_cast<int>(radius));
@@ -620,16 +621,23 @@ static std::vector<CellData> biharmonicFillHitCells(
 					static_cast<uint>(r) * grid.cols +
 					static_cast<uint>(c);
 				if (depthCells[neighborIdx].hasHit) {
-					return true;
+					const uint rowDistance = static_cast<uint>(
+						std::abs(r - static_cast<int>(row)));
+					const uint colDistance = static_cast<uint>(
+						std::abs(c - static_cast<int>(col)));
+					nearestDistance = std::min(
+						nearestDistance,
+						std::max(rowDistance, colDistance));
 				}
 			}
 		}
 
-		return false;
+		return nearestDistance;
 	};
 
 	std::vector<int> unknownVarIds(depthCells.size(), -1);
 	std::vector<char> isFixedCollar(depthCells.size(), false);
+	std::vector<double> originalDistanceWeights(depthCells.size(), 1.0);
 	std::vector<uint> unknownIds;
 	std::vector<uint> fixedIds;
 	unknownIds.reserve(depthCells.size());
@@ -639,13 +647,27 @@ static std::vector<CellData> biharmonicFillHitCells(
 			continue;
 		}
 
-		const bool isMovableBorder =
+		const uint hitDistance =
+			depthCells[idx].hasHit ?
+				0 :
+				nearestHitCellDistance(idx, collarRadius);
+
+		const bool isWeightedCollar =
 			!depthCells[idx].hasHit &&
 			collarRadius > 0 &&
-			isNearHitCell(idx, collarRadius);
+			hitDistance <= collarRadius;
+
+		if (depthCells[idx].hasHit) {
+			originalDistanceWeights[idx] = 0.0;
+		}
+		else if (isWeightedCollar) {
+			originalDistanceWeights[idx] =
+				static_cast<double>(hitDistance) /
+				static_cast<double>(collarRadius + 1);
+		}
 
 		if (depthCells[idx].hasClampedHit ||
-			(!depthCells[idx].hasHit && !isMovableBorder)) {
+			(!depthCells[idx].hasHit && !isWeightedCollar)) {
 			continue;
 		}
 
@@ -852,7 +874,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 	}
 
 	for (uint i = 0; i < unknownIds.size(); ++i) {
-		const double distance =
+		double distance =
 			solvedDistances(static_cast<Eigen::Index>(i));
 
 		if (!std::isfinite(distance)) {
@@ -862,6 +884,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 		bool ignoreMax = false;
 
 		CellData& cell = depthCells[unknownIds[i]];
+		const double originalDistance = cell.distance;
 
 		const std::vector<uint> neighbors = squareNeighborIndices(unknownIds[i], grid, 3);
 		for (uint neighborIdx : neighbors) {
@@ -880,6 +903,14 @@ static std::vector<CellData> biharmonicFillHitCells(
 		}
 		else {
 			cell.distance = distance;
+		}
+
+		const double originalDistanceWeight =
+			originalDistanceWeights[unknownIds[i]];
+		if (originalDistanceWeight > 0.0) {
+			cell.distance =
+				originalDistanceWeight * originalDistance +
+				(1.0 - originalDistanceWeight) * cell.distance;
 		}
 
 		cell.hitPoints = {cell.cellCenter + direction * cell.distance};
@@ -1292,7 +1323,7 @@ static std::vector<CellData> makeDepthCells(
 		grid,
 		direction,
 		eps,
-		0);
+		3);
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 
