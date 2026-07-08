@@ -913,7 +913,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 			}
 		}
 
-		ignoreMax = true; //debug REMOVE!!!!
+		//ignoreMax = true; //debug REMOVE!!!!
 
 		if (!ignoreMax) {
 			cell.distance = std::max(
