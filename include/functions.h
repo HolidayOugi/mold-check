@@ -608,7 +608,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 	const GridChoice& grid,
 	const vcl::Point3d& direction,
 	double eps,
-	vcl::uint collarRadius = 3)
+	vcl::uint collarRadius = 3,
+	double maxDistance = std::numeric_limits<double>::infinity())
 {
 	using namespace vcl;
 
@@ -905,7 +906,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 		CellData& cell = depthCells[unknownIds[i]];
 		const double originalDistance = cell.distance;
 
-		const std::vector<uint> neighbors = squareNeighborIndices(unknownIds[i], grid, 3);
+		const std::vector<uint> neighbors = squareNeighborIndices(unknownIds[i], grid, 5);
 		for (uint neighborIdx : neighbors) {
 			if (!depthCells[neighborIdx].hasHit) {
 				ignoreMax = true;
@@ -918,7 +919,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 		if (!ignoreMax) {
 			cell.distance = std::max(
 				distance,
-				cells[unknownIds[i]].distance);
+				cells[unknownIds[i]].distance + 0.003 * maxDistance);
 		}
 		else {
 			cell.distance = distance;
@@ -1270,7 +1271,8 @@ static std::vector<CellData> makeDepthCells(
 	const GridChoice& grid,
 	double coneCosThreshold,
 	float eps,
-	const std::string&         debugResultsSubdir = "")
+	const std::string&         debugResultsSubdir = "",
+	double maxDistance = std::numeric_limits<double>::infinity())
 {
 	using namespace vcl;
 
@@ -1342,7 +1344,8 @@ static std::vector<CellData> makeDepthCells(
 		grid,
 		direction,
 		eps,
-		3);
+		3,
+		maxDistance);
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 

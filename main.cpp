@@ -369,7 +369,8 @@ MoldCheckMetrics moldCheck(
                 grid,
                 CONE_COS_THRESHOLD,
                 EPS,
-                debugResultsSubdir);
+                debugResultsSubdir,
+                MAX_DISTANCE);
 
         std::cout << "Depth smoothing complete.\n";
         std::cout << "Validating clamped cells...\n";
