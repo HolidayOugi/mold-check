@@ -487,7 +487,10 @@ static std::vector<CellData> reducePoints(
 	double draftAngleDegrees,
 	float eps,
 	double distanceThreshold,
-	double maxDistance)
+	double maxDistance,
+	bool debug = false,
+	const std::string& debugResultsSubdir = "",
+	vcl::uint* debugStepIndex = nullptr)
 {
 	using namespace vcl;
 
@@ -508,23 +511,72 @@ static std::vector<CellData> reducePoints(
 	dilateHitMaskOnce(candidateCells, grid);
 	dilateHitMaskOnce(candidateCells, grid);
 
+	if (debug && debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			candidateCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
+
 	std::vector<std::vector<uint>> connectedNeighbors =
 		removeDistanceJumpPoints(candidateCells,grid, distanceThreshold);
 
+	if (debug && debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			candidateCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
+
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
+
+	if (debug && debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			candidateCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
 
 	removeDraftAngleBoundaryPoints(candidateCells, grid, direction, draftAngleDegrees,eps, maxDistance);
 
+	if (debug && debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			candidateCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
+
 	erodeHitMaskOnce(candidateCells, grid);
 	erodeHitMaskOnce(candidateCells, grid);
 	erodeHitMaskOnce(candidateCells, grid);
 	dilateHitMaskOnce(candidateCells, grid);
 	dilateHitMaskOnce(candidateCells, grid);
 	dilateHitMaskOnce(candidateCells, grid);
+
+	if (debug && debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			candidateCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
 
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
+	if (debug && debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			candidateCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
+
 	candidateCells = cutProtrusions(candidateCells, grid, maxDistance, connectedNeighbors);
+
 
 	std::vector<CellData> reducedCells = cells;
 	parallelFor(allCells, [&](uint idx) {
@@ -533,6 +585,14 @@ static std::vector<CellData> reducePoints(
 			reducedCells[idx].hasClampedHit = false;
 		}
 	});
+
+	if (debug && debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			reducedCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
 
 	return reducedCells;
 }
@@ -1272,7 +1332,8 @@ static std::vector<CellData> makeDepthCells(
 	double coneCosThreshold,
 	float eps,
 	const std::string&         debugResultsSubdir = "",
-	double maxDistance = std::numeric_limits<double>::infinity())
+	double maxDistance = std::numeric_limits<double>::infinity(),
+	vcl::uint* debugStepIndex = nullptr)
 {
 	using namespace vcl;
 
@@ -1304,7 +1365,23 @@ static std::vector<CellData> makeDepthCells(
 		depthCells[i].hasHit = cells[i].hasHit;
 	}
 
+	if (debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			depthCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
+
 	depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
+
+	if (debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			depthCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 
@@ -1346,6 +1423,14 @@ static std::vector<CellData> makeDepthCells(
 		eps,
 		3,
 		maxDistance);
+	
+	if (debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh(
+			depthCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 

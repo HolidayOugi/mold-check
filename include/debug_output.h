@@ -22,6 +22,65 @@ static void addColoredPoint(
 	mesh.vertex(vId).color() = color;
 }
 
+static vcl::Color moldCheckCellDebugColor(const CellData& cell)
+{
+	if (!cell.hasHit) {
+		return vcl::Color::White;
+	}
+
+	if (cell.hasClampedHit) {
+		return vcl::Color::Green;
+	}
+
+	return vcl::Color::Red;
+}
+
+static vcl::PolyMesh makeMoldCheckStepMesh(
+	const std::vector<CellData>& cells,
+	const vcl::Point3d& direction)
+{
+	using namespace vcl;
+
+	PolyMesh stepMesh;
+	stepMesh.enablePerVertexColor();
+
+	for (const CellData& cell : cells) {
+		const double pointDistance =
+			cell.hasClampedHit ? cell.clampedDistance : cell.distance;
+
+		addColoredPoint(
+			stepMesh,
+			cell.cellCenter + direction * pointDistance,
+			moldCheckCellDebugColor(cell));
+	}
+
+	return stepMesh;
+}
+
+static void saveMoldCheckStepMesh(
+	const std::vector<CellData>& cells,
+	const vcl::Point3d& direction,
+	const std::string& debugResultsSubdir,
+	vcl::uint& stepIndex)
+{
+	const std::filesystem::path stepsOutputDir =
+		std::filesystem::path(RESULTS_PATH) /
+		debugResultsSubdir /
+		"steps";
+
+	std::filesystem::create_directories(stepsOutputDir);
+
+	const std::filesystem::path stepPath =
+		stepsOutputDir /
+		("mold_check_step_" + std::to_string(stepIndex) + ".ply");
+
+	vcl::saveMesh(
+		makeMoldCheckStepMesh(cells, direction),
+		stepPath.string());
+
+	++stepIndex;
+}
+
 vcl::PolyMesh validateClampedCells(
 	const std::vector<CellData>& cells,
 	const std::vector<vcl::uint>& allCells,

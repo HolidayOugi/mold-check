@@ -248,6 +248,15 @@ MoldCheckMetrics moldCheck(
             RAY_EPS);
     });
 
+    uint debugStepIndex = 0;
+    if (debug) {
+        saveMoldCheckStepMesh(
+            cells,
+            direction,
+            debugResultsSubdir,
+            debugStepIndex);
+    }
+
     uint rawHitCount = 0;
     std::vector<uint> hitCellIds;
     hitCellIds.reserve(cells.size());
@@ -278,6 +287,14 @@ MoldCheckMetrics moldCheck(
             EPS);
     });
 
+    if (debug) {
+        saveMoldCheckStepMesh(
+            cells,
+            direction,
+            debugResultsSubdir,
+            debugStepIndex);
+    }
+
     const double REDUCE_POINTS_REFERENCE_CELL_SIDE = 0.4;
     const double reducePointsCellScale =
         ((grid.sideU + grid.sideV) * 0.5) /
@@ -293,7 +310,10 @@ MoldCheckMetrics moldCheck(
         draftAngleDegrees,
         EPS,
         REDUCE_POINTS_DISTANCE_THRESHOLD,
-        MAX_DISTANCE);
+        MAX_DISTANCE,
+        debug,
+        debugResultsSubdir,
+        &debugStepIndex);
 
     double totalAreaHit = 0.0;
     double clampedAreaHit = 0.0;
@@ -370,7 +390,8 @@ MoldCheckMetrics moldCheck(
                 CONE_COS_THRESHOLD,
                 EPS,
                 debugResultsSubdir,
-                MAX_DISTANCE);
+                MAX_DISTANCE,
+                &debugStepIndex);
 
         std::cout << "Depth smoothing complete.\n";
         std::cout << "Validating clamped cells...\n";
