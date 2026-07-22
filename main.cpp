@@ -248,9 +248,9 @@ MoldCheckMetrics moldCheck(
             RAY_EPS);
     });
 
-    uint debugStepIndex = 1;
+    uint debugStepIndex = 0;
     if (debug) {
-        saveMoldCheckStepMesh( // Step 1
+        saveMoldCheckStepMesh(
             cells,
             direction,
             debugResultsSubdir,
@@ -288,7 +288,7 @@ MoldCheckMetrics moldCheck(
     });
 
     if (debug) {
-        saveMoldCheckStepMesh( // Step 2
+        saveMoldCheckStepMesh(
             cells,
             direction,
             debugResultsSubdir,

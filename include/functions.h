@@ -512,7 +512,7 @@ static std::vector<CellData> reducePoints(
 	dilateHitMaskOnce(candidateCells, grid);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 3
+		saveMoldCheckStepMesh(
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -523,7 +523,7 @@ static std::vector<CellData> reducePoints(
 		removeDistanceJumpPoints(candidateCells,grid, distanceThreshold);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 4
+		saveMoldCheckStepMesh(
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -533,7 +533,7 @@ static std::vector<CellData> reducePoints(
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 5
+		saveMoldCheckStepMesh(
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -543,7 +543,7 @@ static std::vector<CellData> reducePoints(
 	removeDraftAngleBoundaryPoints(candidateCells, grid, direction, draftAngleDegrees,eps, maxDistance);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 6
+		saveMoldCheckStepMesh(
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -558,7 +558,7 @@ static std::vector<CellData> reducePoints(
 	dilateHitMaskOnce(candidateCells, grid);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 7
+		saveMoldCheckStepMesh(
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -568,7 +568,7 @@ static std::vector<CellData> reducePoints(
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 8
+		saveMoldCheckStepMesh(
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -587,7 +587,7 @@ static std::vector<CellData> reducePoints(
 	});
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 9
+		saveMoldCheckStepMesh(
 			reducedCells,
 			direction,
 			debugResultsSubdir,
@@ -961,10 +961,29 @@ static std::vector<CellData> biharmonicFillHitCells(
 			continue;
 		}
 
+		bool ignoreMax = false;
+
 		CellData& cell = depthCells[unknownIds[i]];
 		const double originalDistance = cell.distance;
 
-		cell.distance = distance;
+		const std::vector<uint> neighbors = squareNeighborIndices(unknownIds[i], grid, 5);
+		for (uint neighborIdx : neighbors) {
+			if (!depthCells[neighborIdx].hasHit) {
+				ignoreMax = true;
+				break;
+			}
+		}
+
+		//ignoreMax = true; //debug REMOVE!!!!
+
+		if (!ignoreMax) {
+			cell.distance = std::max(
+				distance,
+				cells[unknownIds[i]].distance + 0.003 * maxDistance);
+		}
+		else {
+			cell.distance = distance;
+		}
 
 		const double originalDistanceWeight =
 			originalDistanceWeights[unknownIds[i]];
@@ -972,16 +991,6 @@ static std::vector<CellData> biharmonicFillHitCells(
 			cell.distance =
 				originalDistanceWeight * originalDistance +
 				(1.0 - originalDistanceWeight) * cell.distance;
-		}
-
-		const uint cellIdx = unknownIds[i];
-		if (!cell.hasHit &&
-			std::isfinite(cells[cellIdx].distance) &&
-			std::isfinite(maxDistance) &&
-			std::abs(cells[cellIdx].distance - maxDistance) > eps) {
-			cell.distance = std::min(
-				cell.distance,
-				cells[cellIdx].distance - 0.01 * maxDistance);
 		}
 
 		cell.hitPoints = {cell.cellCenter + direction * cell.distance};
@@ -999,9 +1008,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 
 static std::vector<double> pushPull(
 	const std::vector<CellData>& cells,
-	const GridChoice& grid,
-	const std::vector<double>* additionalFixedDistances = nullptr,
-	const std::vector<char>* additionalFixedMask = nullptr)
+	const GridChoice& grid)
 {
 	using namespace vcl;
 
@@ -1020,17 +1027,6 @@ static std::vector<double> pushPull(
 		if (cells[i].hasHit && !cells[i].hasClampedHit) {
 			base.distances[i] = cells[i].clampedDistance;
 			base.weights[i] = 1.0;
-			return;
-		}
-
-		if (additionalFixedDistances != nullptr &&
-			additionalFixedMask != nullptr &&
-			i < additionalFixedDistances->size() &&
-			i < additionalFixedMask->size() &&
-			(*additionalFixedMask)[i] &&
-			std::isfinite((*additionalFixedDistances)[i])) {
-			base.distances[i] = (*additionalFixedDistances)[i];
-			base.weights[i] = 1.0;
 		}
 	});
 
@@ -1039,16 +1035,7 @@ static std::vector<double> pushPull(
 			return cell.hasHit && !cell.hasClampedHit;
 		}));
 
-	const uint additionalFixedCount =
-		additionalFixedMask == nullptr ?
-			0 :
-			static_cast<uint>(
-				std::count(
-					additionalFixedMask->begin(),
-					additionalFixedMask->end(),
-					static_cast<char>(true)));
-
-	if (fixedHitCount + additionalFixedCount == 0) {
+	if (fixedHitCount == 0) {
 		return base.distances;
 	}
 
@@ -1122,18 +1109,6 @@ static std::vector<double> pushPull(
 				return;
 			}
 
-			if (level == 1 &&
-				additionalFixedDistances != nullptr &&
-				additionalFixedMask != nullptr &&
-				index < additionalFixedDistances->size() &&
-				index < additionalFixedMask->size() &&
-				(*additionalFixedMask)[index] &&
-				std::isfinite((*additionalFixedDistances)[index])) {
-				fine.distances[index] = (*additionalFixedDistances)[index];
-				fine.weights[index] = 1.0;
-				return;
-			}
-
 			if (level > 1 && fine.weights[index] > 0.0) {
 				return;
 			}
@@ -1165,8 +1140,7 @@ static std::vector<CellData> successiveOverRelaxation(
 	const GridChoice& grid,
 	vcl::uint maxIterations,
 	double omega,
-	double eps,
-	const std::vector<char>* additionalFixedMask = nullptr)
+	double eps)
 {
 	using namespace vcl;
 
@@ -1187,12 +1161,6 @@ static std::vector<CellData> successiveOverRelaxation(
 		for (uint color = 0; color < 2; ++color) {
 			parallelFor(allCells, [&](uint idx) {
 				if (cells[idx].hasHit && !cells[idx].hasClampedHit) {
-					return;
-				}
-
-				if (additionalFixedMask != nullptr &&
-					idx < additionalFixedMask->size() &&
-					(*additionalFixedMask)[idx]) {
 					return;
 				}
 
@@ -1357,184 +1325,6 @@ static std::vector<CellData> smoothMeshPits(
 	return depthCells;
 }
 
-static void clampUnknownDepthCellsToOriginalDistances(
-	std::vector<CellData>& depthCells,
-	const std::vector<CellData>& cells,
-	const vcl::Point3d& direction,
-	double maxDistance,
-	float eps)
-{
-	using namespace vcl;
-
-	if (depthCells.size() != cells.size() || !std::isfinite(maxDistance)) {
-		return;
-	}
-
-	std::vector<uint> allCells(depthCells.size());
-	std::iota(allCells.begin(), allCells.end(), 0);
-
-	parallelFor(allCells, [&](uint idx) {
-		if (depthCells[idx].hasHit ||
-			!std::isfinite(depthCells[idx].distance) ||
-			!std::isfinite(cells[idx].distance) ||
-			std::abs(cells[idx].distance - maxDistance) <= eps) {
-			return;
-		}
-
-		const double clampedDistance =
-			cells[idx].distance - 0.01 * maxDistance;
-
-		if (depthCells[idx].distance <= clampedDistance) {
-			return;
-		}
-
-		depthCells[idx].distance = clampedDistance;
-		depthCells[idx].hitPoints = {
-			depthCells[idx].cellCenter + direction * clampedDistance};
-
-		if (depthCells[idx].hasClampedHit) {
-			depthCells[idx].clampedDistance = clampedDistance;
-		}
-	});
-}
-
-static void clampRaisedRedComponents(
-	std::vector<CellData>& depthCells,
-	const std::vector<CellData>& cells,
-	const vcl::Point3d& direction,
-	const GridChoice& grid,
-	double maxDistance,
-	float eps,
-	const std::string& debugResultsSubdir = "",
-	const std::string& debugLabel = "")
-{
-	using namespace vcl;
-
-	if (depthCells.size() != cells.size() ||
-		depthCells.size() != grid.rows * grid.cols ||
-		!std::isfinite(maxDistance)) {
-		return;
-	}
-
-	const auto thresholdDistance = [&](uint idx) {
-		return cells[idx].distance + 0.003 * maxDistance;
-	};
-
-	const auto shouldCheck = [&](uint idx) {
-		return depthCells[idx].hasHit &&
-			std::isfinite(depthCells[idx].distance) &&
-			std::isfinite(cells[idx].distance) &&
-			depthCells[idx].distance < thresholdDistance(idx);
-	};
-
-	std::vector<char> visited(depthCells.size(), false);
-	std::vector<uint> stack;
-	std::vector<uint> component;
-	std::vector<uint> touchingWhiteIds;
-	uint componentIndex = 0;
-	PolyMesh debugComponentsMesh;
-	const bool saveDebugMesh = !debugLabel.empty();
-	if (saveDebugMesh) {
-		debugComponentsMesh.enablePerVertexColor();
-	}
-
-	for (uint startIdx = 0; startIdx < depthCells.size(); ++startIdx) {
-		if (visited[startIdx] || !shouldCheck(startIdx)) {
-			continue;
-		}
-
-		stack.clear();
-		component.clear();
-		touchingWhiteIds.clear();
-		bool touchesWhite = false;
-
-		visited[startIdx] = true;
-		stack.push_back(startIdx);
-
-		while (!stack.empty()) {
-			const uint idx = stack.back();
-			stack.pop_back();
-			component.push_back(idx);
-
-			forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
-				if (shouldCheck(neighborIdx)) {
-					if (!visited[neighborIdx]) {
-						visited[neighborIdx] = true;
-						stack.push_back(neighborIdx);
-					}
-				}
-				else if (!depthCells[neighborIdx].hasHit) {
-					touchesWhite = true;
-					touchingWhiteIds.push_back(neighborIdx);
-				}
-
-				return true;
-			});
-		}
-
-		++componentIndex;
-		std::cout << "  raised red component " << componentIndex
-				  << ": size = " << component.size()
-				  << ", touchesWhite = " << (touchesWhite ? "true" : "false")
-				  << ", action = " << (touchesWhite ? "keep" : "clamp")
-				  << "\n";
-		std::cout.flush();
-
-		if (touchesWhite) {
-			if (saveDebugMesh) {
-				for (uint idx : component) {
-					addColoredPoint(
-						debugComponentsMesh,
-						depthCells[idx].cellCenter +
-							direction * depthCells[idx].distance,
-						Color::Magenta);
-				}
-
-				for (uint idx : touchingWhiteIds) {
-					addColoredPoint(
-						debugComponentsMesh,
-						depthCells[idx].cellCenter +
-							direction * depthCells[idx].distance,
-						Color::Cyan);
-				}
-			}
-			continue;
-		}
-
-		for (uint idx : component) {
-			const double clampedDistance = thresholdDistance(idx);
-			if (saveDebugMesh) {
-				addColoredPoint(
-					debugComponentsMesh,
-					depthCells[idx].cellCenter +
-						direction * depthCells[idx].distance,
-					Color::Red);
-			}
-
-			depthCells[idx].distance = clampedDistance;
-			depthCells[idx].hitPoints = {
-				depthCells[idx].cellCenter + direction * clampedDistance};
-
-			if (depthCells[idx].hasClampedHit) {
-				depthCells[idx].clampedDistance = clampedDistance;
-			}
-		}
-	}
-
-	if (saveDebugMesh) {
-		const std::filesystem::path debugOutputDir =
-			std::filesystem::path(RESULTS_PATH) /
-			debugResultsSubdir /
-			"steps";
-
-		std::filesystem::create_directories(debugOutputDir);
-		saveMesh(
-			debugComponentsMesh,
-			(debugOutputDir /
-				("raised_red_components_" + debugLabel + ".ply")).string());
-	}
-}
-
 static std::vector<CellData> makeDepthCells(
 	const std::vector<CellData>& cells,
 	const vcl::Point3d& direction,
@@ -1576,7 +1366,7 @@ static std::vector<CellData> makeDepthCells(
 	}
 
 	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 10
+		saveMoldCheckStepMesh(
 			depthCells,
 			direction,
 			debugResultsSubdir,
@@ -1586,14 +1376,14 @@ static std::vector<CellData> makeDepthCells(
 	depthCells = successiveOverRelaxation(depthCells, cells, direction, grid, 1000, 1.6, eps);
 
 	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 11
+		saveMoldCheckStepMesh(
 			depthCells,
 			direction,
 			debugResultsSubdir,
 			*debugStepIndex);
 	}
 
-	//depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
+	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 
 	PolyMesh depthPointsMesh;
 	depthPointsMesh.enablePerVertexColor();
@@ -1635,139 +1425,7 @@ static std::vector<CellData> makeDepthCells(
 		maxDistance);
 	
 	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 12
-			depthCells,
-			direction,
-			debugResultsSubdir,
-			*debugStepIndex);
-	}
-
-	clampRaisedRedComponents(
-		depthCells,
-		cells,
-		direction,
-		grid,
-		maxDistance,
-		eps,
-		debugResultsSubdir,
-		debugStepIndex != nullptr ? "step_13" : "");
-
-	//depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
-	
-	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 13
-			depthCells,
-			direction,
-			debugResultsSubdir,
-			*debugStepIndex);
-	}
-
-	clampUnknownDepthCellsToOriginalDistances(
-		depthCells,
-		cells,
-		direction,
-		maxDistance,
-		eps);
-	
-	//depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
-
-	std::vector<char> secondPassFixedMask(depthCells.size(), false);
-	std::vector<double> secondPassFixedDistances(depthCells.size(), 0.0);
-	std::vector<uint> depthCellIds(depthCells.size());
-	std::iota(depthCellIds.begin(), depthCellIds.end(), 0);
-
-	parallelFor(depthCellIds, [&](uint i) {
-		if (cells[i].hasHit ||
-			!std::isfinite(cells[i].distance) ||
-			!std::isfinite(depthCells[i].distance) ||
-			depthCells[i].distance >= cells[i].distance - eps) {
-			return;
-		}
-
-		secondPassFixedMask[i] = true;
-		secondPassFixedDistances[i] = depthCells[i].distance;
-	});
-
-	const std::vector<double> secondPassDistances =
-		pushPull(
-			cells,
-			grid,
-			&secondPassFixedDistances,
-			&secondPassFixedMask);
-
-	parallelFor(depthCellIds, [&](uint i) {
-		depthCells[i].distance = secondPassDistances[i];
-
-		if (cells[i].hasClampedHit) {
-			depthCells[i].distance =
-				std::min(depthCells[i].distance, cells[i].clampedDistance);
-		}
-
-		depthCells[i].hitPoints = {
-			depthCells[i].cellCenter + direction * depthCells[i].distance
-		};
-		depthCells[i].hasHit = cells[i].hasHit;
-	});
-
-	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 14
-			depthCells,
-			direction,
-			debugResultsSubdir,
-			*debugStepIndex);
-	}
-
-	depthCells =
-		successiveOverRelaxation(
-			depthCells,
-			cells,
-			direction,
-			grid,
-			1000,
-			1.6,
-			eps,
-			&secondPassFixedMask);
-
-	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 15
-			depthCells,
-			direction,
-			debugResultsSubdir,
-			*debugStepIndex);
-	}
-
-	//depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
-
-
-	depthCells = biharmonicFillHitCells(
-		cells,
-		depthCells,
-		grid,
-		direction,
-		eps,
-		3,
-		maxDistance);
-	
-	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 16
-			depthCells,
-			direction,
-			debugResultsSubdir,
-			*debugStepIndex);
-	}
-
-	clampRaisedRedComponents(
-		depthCells,
-		cells,
-		direction,
-		grid,
-		maxDistance,
-		eps,
-		debugResultsSubdir,
-		debugStepIndex != nullptr ? "step_17" : "");
-
-	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh( // Step 17
+		saveMoldCheckStepMesh(
 			depthCells,
 			direction,
 			debugResultsSubdir,
