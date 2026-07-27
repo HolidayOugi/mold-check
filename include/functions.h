@@ -669,12 +669,170 @@ static std::vector<CellData> fixDepthCellConeViolations(
 	return depthCells;
 }
 
+static std::vector<CellData> clampRedDepthCells(
+	const std::vector<CellData>& cells,
+	std::vector<CellData> depthCells,
+	const GridChoice& grid,
+	const vcl::Point3d& direction,
+	double maxDistance,
+	const std::string& debugResultsSubdir)
+{
+	using namespace vcl;
+
+	if (depthCells.size() != cells.size() ||
+		depthCells.size() != grid.rows * grid.cols ||
+		!std::isfinite(maxDistance)) {
+		return depthCells;
+	}
+
+	std::vector<unsigned char> isCandidate(depthCells.size(), false);
+	std::vector<unsigned char> isVisited(depthCells.size(), false);
+	// Tutte le componenti candidate sono esportate in giallo.
+	PolyMesh connectedGroupsMesh;
+	connectedGroupsMesh.enablePerVertexColor();
+
+	for (uint idx = 0; idx < depthCells.size(); ++idx) {
+		isCandidate[idx] =
+			depthCells[idx].hasHit &&
+			std::isfinite(depthCells[idx].distance) &&
+			std::isfinite(cells[idx].distance) &&
+			depthCells[idx].distance <
+				cells[idx].distance;
+	}
+
+	for (uint seedIdx = 0; seedIdx < depthCells.size(); ++seedIdx) {
+		if (!isCandidate[seedIdx] || isVisited[seedIdx]) {
+			continue;
+		}
+
+		std::vector<uint> component;
+		std::vector<uint> pendingCells = {seedIdx};
+		bool touchesWhiteCell = false;
+		isVisited[seedIdx] = true;
+
+		while (!pendingCells.empty()) {
+			const uint idx = pendingCells.back();
+			pendingCells.pop_back();
+			component.push_back(idx);
+
+			forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
+				if (!depthCells[neighborIdx].hasHit) {
+					touchesWhiteCell = true;
+					return true;
+				}
+
+				if (isCandidate[neighborIdx] &&
+					!isVisited[neighborIdx]) {
+					isVisited[neighborIdx] = true;
+					pendingCells.push_back(neighborIdx);
+				}
+				return true;
+			});
+		}
+
+		for (uint idx : component) {
+			addColoredPoint(
+				connectedGroupsMesh,
+				depthCells[idx].cellCenter +
+					direction * depthCells[idx].distance,
+				Color::Yellow);
+		}
+
+		if (touchesWhiteCell) {
+			continue;
+		}
+
+		for (uint idx : component) {
+			depthCells[idx].distance =
+				cells[idx].distance + 0.003 * maxDistance;
+			depthCells[idx].hitPoints = {
+				depthCells[idx].cellCenter +
+				direction * depthCells[idx].distance};
+
+			if (depthCells[idx].hasClampedHit) {
+				depthCells[idx].clampedDistance =
+					depthCells[idx].distance;
+			}
+		}
+	}
+
+	if (connectedGroupsMesh.vertexCount() > 0) {
+		const std::filesystem::path debugOutputDir =
+			std::filesystem::path(RESULTS_PATH) /
+			debugResultsSubdir;
+		std::filesystem::create_directories(debugOutputDir);
+		saveMesh(
+			connectedGroupsMesh,
+			(debugOutputDir /
+				"mold_check_clamp_connected_groups.ply").string());
+	}
+
+	return depthCells;
+}
+
+static std::vector<CellData> postProcessWhiteDepthCells(
+	const std::vector<CellData>& cells,
+	std::vector<CellData> depthCells,
+	const GridChoice& grid,
+	const vcl::Point3d& direction,
+	double maxDistance,
+	std::vector<unsigned char>* movedWhiteAnchors = nullptr)
+{
+	using namespace vcl;
+
+	if (movedWhiteAnchors != nullptr) {
+		movedWhiteAnchors->assign(depthCells.size(), false);
+	}
+
+	if (depthCells.size() != cells.size() ||
+		depthCells.size() != grid.rows * grid.cols ||
+		!std::isfinite(maxDistance)) {
+		return depthCells;
+	}
+
+	std::vector<uint> allCells(depthCells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
+
+	parallelFor(allCells, [&](uint idx) {
+		if (depthCells[idx].hasHit ||
+			depthCells[idx].distance <= cells[idx].distance) {
+			return;
+		}
+
+		bool hasAdjacentHit = false;
+		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
+			if (depthCells[neighborIdx].hasHit) {
+				hasAdjacentHit = true;
+				return false;
+			}
+			return true;
+		});
+
+		if (hasAdjacentHit) {
+			return;
+		}
+
+		depthCells[idx].distance =
+			cells[idx].distance - 0.01 * maxDistance;
+		depthCells[idx].hitPoints = {
+			depthCells[idx].cellCenter +
+			direction * depthCells[idx].distance};
+
+		if (movedWhiteAnchors != nullptr) {
+			(*movedWhiteAnchors)[idx] = true;
+		}
+	});
+
+	return depthCells;
+}
+
 static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
 	const std::vector<CellData>& cells,
 	std::vector<CellData> depthCells,
 	const GridChoice& grid,
 	const vcl::Point3d& direction,
-	double eps)
+	double eps,
+	const std::vector<unsigned char>* fixedWhiteAnchors = nullptr)
 {
 	using namespace vcl;
 
@@ -694,7 +852,14 @@ static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
 			continue;
 		}
 
-		if (cells[idx].hasHit && !cells[idx].hasClampedHit) {
+		const bool isFixedWhiteAnchor =
+			fixedWhiteAnchors != nullptr &&
+			fixedWhiteAnchors->size() == depthCells.size() &&
+			(*fixedWhiteAnchors)[idx] &&
+			!cells[idx].hasHit;
+
+		if ((cells[idx].hasHit && !cells[idx].hasClampedHit) ||
+			isFixedWhiteAnchor) {
 			isFixedRed[idx] = true;
 			continue;
 		}
@@ -734,7 +899,7 @@ static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
 
 	std::cout << "  biharmonic white cells from red cells. Unknown cells: "
 			  << unknownIds.size()
-			  << ", fixed red anchor cells: " << fixedIds.size() << "\n";
+			  << ", fixed anchor cells: " << fixedIds.size() << "\n";
 	std::cout.flush();
 
 	std::vector<uint> laplacianRowCellIds = unknownIds;
@@ -886,7 +1051,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 	const vcl::Point3d& direction,
 	double eps,
 	vcl::uint collarRadius = 3,
-	double maxDistance = std::numeric_limits<double>::infinity())
+	double maxDistance = std::numeric_limits<double>::infinity(),
+	const std::vector<unsigned char>* fixedWhiteAnchors = nullptr)
 {
 	using namespace vcl;
 
@@ -944,6 +1110,12 @@ static std::vector<CellData> biharmonicFillHitCells(
 			continue;
 		}
 
+		const bool isFixedWhiteAnchor =
+			fixedWhiteAnchors != nullptr &&
+			fixedWhiteAnchors->size() == depthCells.size() &&
+			(*fixedWhiteAnchors)[idx] &&
+			!depthCells[idx].hasHit;
+
 		const uint hitDistance =
 			depthCells[idx].hasHit ?
 				0 :
@@ -963,7 +1135,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 				static_cast<double>(collarRadius + 1);
 		}
 
-		if (depthCells[idx].hasClampedHit ||
+		if (isFixedWhiteAnchor ||
+			depthCells[idx].hasClampedHit ||
 			(!depthCells[idx].hasHit && !isWeightedCollar)) {
 			continue;
 		}
@@ -1178,29 +1351,9 @@ static std::vector<CellData> biharmonicFillHitCells(
 			continue;
 		}
 
-		bool ignoreMax = false;
-
 		CellData& cell = depthCells[unknownIds[i]];
 		const double originalDistance = cell.distance;
-
-		const std::vector<uint> neighbors = squareNeighborIndices(unknownIds[i], grid, 5);
-		for (uint neighborIdx : neighbors) {
-			if (!depthCells[neighborIdx].hasHit) {
-				ignoreMax = true;
-				break;
-			}
-		}
-
-		//ignoreMax = true; //debug REMOVE!!!!
-
-		if (!ignoreMax) {
-			cell.distance = std::max(
-				distance,
-				cells[unknownIds[i]].distance + 0.003 * maxDistance);
-		}
-		else {
-			cell.distance = distance;
-		}
+		cell.distance = distance;
 
 		const double originalDistanceWeight =
 			originalDistanceWeights[unknownIds[i]];
@@ -1654,6 +1807,35 @@ static std::vector<CellData> makeDepthCells(
 		eps,
 		3,
 		maxDistance);
+
+	std::vector<unsigned char> postProcessedWhiteAnchors;
+	depthCells =
+		postProcessWhiteDepthCells(
+			cells,
+			depthCells,
+			grid,
+			direction,
+			maxDistance,
+			&postProcessedWhiteAnchors);
+
+	depthCells =
+		biharmonicFillWhiteCellsFromRedCells(
+			cells,
+			depthCells,
+			grid,
+			direction,
+			eps,
+			&postProcessedWhiteAnchors);
+
+	depthCells = biharmonicFillHitCells(
+		cells,
+		depthCells,
+		grid,
+		direction,
+		eps,
+		3,
+		maxDistance,
+		&postProcessedWhiteAnchors);
 	
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh(
@@ -1664,6 +1846,15 @@ static std::vector<CellData> makeDepthCells(
 	}
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
+
+	depthCells =
+		clampRedDepthCells(
+			cells,
+			depthCells,
+			grid,
+			direction,
+			maxDistance,
+			debugResultsSubdir);
 
 	return depthCells;
 }
