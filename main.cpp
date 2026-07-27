@@ -710,9 +710,14 @@ int main()
 
     std::vector<std::pair<double, int>> scoredDirections;
 
-    for (const auto& direction : fibNormals) {
-        const int directionIndex =
-            static_cast<int>(&direction - &fibNormals[0]);
+    // Temporarily test only direction 0 instead of all 100 directions.
+    const std::vector<int> directionIndicesToTest = {0};
+
+    // for (const auto& direction : fibNormals) {
+    for (const int directionIndex : directionIndicesToTest) {
+        const auto& direction = fibNormals[directionIndex];
+        // const int directionIndex =
+        //     static_cast<int>(&direction - &fibNormals[0]);
 
         std::cout << "Processing direction: "
                   << direction << "\n";
