@@ -439,6 +439,64 @@ static std::vector<std::vector<vcl::uint>> removeDistanceJumpPoints(
 	return connectedNeighbors;
 }
 
+static std::vector<std::vector<vcl::uint>> removeAngleJumpPoints(
+	const std::vector<CellData>& cells,
+	const GridChoice& grid,
+	const vcl::Point3d& direction,
+	double angleThresholdDegrees,
+	float eps)
+{
+	using namespace vcl;
+
+	Point3d normalizedDirection = direction;
+	double coneCosThreshold = -std::numeric_limits<double>::infinity();
+	bool useAngleThreshold = false;
+
+	if (angleThresholdDegrees > 0.0 && normalizedDirection.norm() > eps) {
+		normalizedDirection.normalize();
+		coneCosThreshold =
+			std::cos(angleThresholdDegrees * M_PI / 180.0);
+		useAngleThreshold = true;
+	}
+
+	std::vector<std::vector<uint>> connectedNeighbors(cells.size());
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		if (!cells[idx].hasHit || cells[idx].hitPoints.empty()) {
+			continue;
+		}
+
+		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
+			if (neighborIdx <= idx ||
+				!cells[neighborIdx].hasHit ||
+				cells[neighborIdx].hitPoints.empty()) {
+				return true;
+			}
+
+			const Point3d& point = cells[idx].hitPoints[0];
+			const Point3d& neighborPoint =
+				cells[neighborIdx].hitPoints[0];
+
+			const bool isAngleJump =
+				useAngleThreshold &&
+				(isWithinPlaneAngle(
+					 point,
+					 neighborPoint,
+					 normalizedDirection,
+					 coneCosThreshold,
+					 eps));
+
+			if (!isAngleJump) {
+				connectedNeighbors[idx].push_back(neighborIdx);
+				connectedNeighbors[neighborIdx].push_back(idx);
+			}
+
+			return true;
+		});
+	}
+
+	return connectedNeighbors;
+}
+
 static std::vector<CellData> keepLargestHitComponent(
 	const std::vector<CellData>& cells,
 	const std::vector<std::vector<vcl::uint>>& connectedNeighbors)

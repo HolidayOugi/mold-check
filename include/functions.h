@@ -486,7 +486,7 @@ static std::vector<CellData> reducePoints(
 	const vcl::Point3d& direction,
 	double draftAngleDegrees,
 	float eps,
-	double distanceThreshold,
+	double angleThresholdDegrees,
 	double maxDistance,
 	bool debug = false,
 	const std::string& debugResultsSubdir = "",
@@ -519,8 +519,15 @@ static std::vector<CellData> reducePoints(
 			*debugStepIndex);
 	}
 
+	// std::vector<std::vector<uint>> connectedNeighbors =
+	// 	removeDistanceJumpPoints(candidateCells,grid, distanceThreshold);
 	std::vector<std::vector<uint>> connectedNeighbors =
-		removeDistanceJumpPoints(candidateCells,grid, distanceThreshold);
+		removeAngleJumpPoints(
+			candidateCells,
+			grid,
+			direction,
+			angleThresholdDegrees,
+			eps);
 
 	if (debug && debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh(

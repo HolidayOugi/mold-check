@@ -295,21 +295,15 @@ MoldCheckMetrics moldCheck(
             debugStepIndex);
     }
 
-    const double REDUCE_POINTS_REFERENCE_CELL_SIDE = 0.4;
-    const double reducePointsCellScale =
-        ((grid.sideU + grid.sideV) * 0.5) /
-        REDUCE_POINTS_REFERENCE_CELL_SIDE;
-
-    const double REDUCE_POINTS_DISTANCE_THRESHOLD =
-        0.02 * MAX_DISTANCE * reducePointsCellScale;
-
+    const double REDUCE_POINTS_ANGLE_THRESHOLD_DEGREES = 10.0;
+    
     cells = reducePoints(
         cells,
         grid,
         direction,
         draftAngleDegrees,
         EPS,
-        REDUCE_POINTS_DISTANCE_THRESHOLD,
+        REDUCE_POINTS_ANGLE_THRESHOLD_DEGREES,
         MAX_DISTANCE,
         debug,
         debugResultsSubdir,
