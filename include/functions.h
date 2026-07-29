@@ -512,7 +512,7 @@ static std::vector<CellData> reducePoints(
 	dilateHitMaskOnce(candidateCells, grid);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
+		saveMoldCheckStepMesh( // Step 3
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -530,7 +530,7 @@ static std::vector<CellData> reducePoints(
 			eps);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
+		saveMoldCheckStepMesh( // Step 4
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -540,7 +540,7 @@ static std::vector<CellData> reducePoints(
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
+		saveMoldCheckStepMesh( // Step 5
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -550,7 +550,7 @@ static std::vector<CellData> reducePoints(
 	removeDraftAngleBoundaryPoints(candidateCells, grid, direction, draftAngleDegrees,eps, maxDistance);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
+		saveMoldCheckStepMesh( // Step 6
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -565,7 +565,7 @@ static std::vector<CellData> reducePoints(
 	dilateHitMaskOnce(candidateCells, grid);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
+		saveMoldCheckStepMesh( // Step 7
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -575,7 +575,7 @@ static std::vector<CellData> reducePoints(
 	candidateCells = keepLargestHitComponent(candidateCells, connectedNeighbors);
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
+		saveMoldCheckStepMesh( // Step 8
 			candidateCells,
 			direction,
 			debugResultsSubdir,
@@ -594,7 +594,7 @@ static std::vector<CellData> reducePoints(
 	});
 
 	if (debug && debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
+		saveMoldCheckStepMesh( // Step 9
 			reducedCells,
 			direction,
 			debugResultsSubdir,
@@ -687,7 +687,6 @@ static std::vector<CellData> clampRedDepthCells(
 
 	std::vector<unsigned char> isCandidate(depthCells.size(), false);
 	std::vector<unsigned char> isVisited(depthCells.size(), false);
-	// Tutte le componenti candidate sono esportate in giallo.
 	PolyMesh connectedGroupsMesh;
 	connectedGroupsMesh.enablePerVertexColor();
 
@@ -1744,7 +1743,7 @@ static std::vector<CellData> makeDepthCells(
 			eps);
 
 	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
+		saveMoldCheckStepMesh( // Step 10
 			depthCells,
 			direction,
 			debugResultsSubdir,
@@ -1760,14 +1759,6 @@ static std::vector<CellData> makeDepthCells(
 	// 		1000,
 	// 		1.6,
 	// 		eps);
-
-	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
-			depthCells,
-			direction,
-			debugResultsSubdir,
-			*debugStepIndex);
-	}
 
 	PolyMesh depthPointsMesh;
 	depthPointsMesh.enablePerVertexColor();
@@ -1808,6 +1799,14 @@ static std::vector<CellData> makeDepthCells(
 		3,
 		maxDistance);
 
+	if (debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh( // Step 11
+			depthCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
+
 	std::vector<unsigned char> postProcessedWhiteAnchors;
 	depthCells =
 		postProcessWhiteDepthCells(
@@ -1817,6 +1816,14 @@ static std::vector<CellData> makeDepthCells(
 			direction,
 			maxDistance,
 			&postProcessedWhiteAnchors);
+	
+	if (debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh( // Step 12
+			depthCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
 
 	depthCells =
 		biharmonicFillWhiteCellsFromRedCells(
@@ -1826,6 +1833,14 @@ static std::vector<CellData> makeDepthCells(
 			direction,
 			eps,
 			&postProcessedWhiteAnchors);
+	
+	if (debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh( // Step 13
+			depthCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
 
 	depthCells = biharmonicFillHitCells(
 		cells,
@@ -1838,15 +1853,12 @@ static std::vector<CellData> makeDepthCells(
 		&postProcessedWhiteAnchors);
 	
 	if (debugStepIndex != nullptr) {
-		saveMoldCheckStepMesh(
+		saveMoldCheckStepMesh( // Step 14
 			depthCells,
 			direction,
 			debugResultsSubdir,
 			*debugStepIndex);
 	}
-
-	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
-
 	depthCells =
 		clampRedDepthCells(
 			cells,
@@ -1855,6 +1867,16 @@ static std::vector<CellData> makeDepthCells(
 			direction,
 			maxDistance,
 			debugResultsSubdir);
+	
+	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
+	
+	if (debugStepIndex != nullptr) {
+		saveMoldCheckStepMesh( // Step 15
+			depthCells,
+			direction,
+			debugResultsSubdir,
+			*debugStepIndex);
+	}
 
 	return depthCells;
 }
