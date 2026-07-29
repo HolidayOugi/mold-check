@@ -747,6 +747,7 @@ static std::vector<CellData> clampRedDepthCells(
 			depthCells[idx].hitPoints = {
 				depthCells[idx].cellCenter +
 				direction * depthCells[idx].distance};
+			depthCells[idx].isPostProcess = true;
 
 			if (depthCells[idx].hasClampedHit) {
 				depthCells[idx].clampedDistance =
@@ -816,6 +817,7 @@ static std::vector<CellData> postProcessWhiteDepthCells(
 		depthCells[idx].hitPoints = {
 			depthCells[idx].cellCenter +
 			direction * depthCells[idx].distance};
+		depthCells[idx].isMovedForward = true;
 
 		if (movedWhiteAnchors != nullptr) {
 			(*movedWhiteAnchors)[idx] = true;
@@ -1351,6 +1353,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 		}
 
 		CellData& cell = depthCells[unknownIds[i]];
+		const bool wasRedHit =
+			cell.hasHit && !cell.hasClampedHit;
 		const double originalDistance = cell.distance;
 		cell.distance = distance;
 
@@ -1366,6 +1370,10 @@ static std::vector<CellData> biharmonicFillHitCells(
 
 		if (cell.hasClampedHit) {
 			cell.clampedDistance = cell.distance;
+		}
+
+		if (wasRedHit) {
+			cell.isBiharmonicFilledHit = true;
 		}
 	}
 
@@ -1765,19 +1773,10 @@ static std::vector<CellData> makeDepthCells(
 	for (uint i = 0; i < depthCells.size(); ++i) {
 		const Point3d depthPoint =
 			depthCells[i].cellCenter + direction * depthCells[i].distance;
-		Color depthColor = Color::White;
-		if (depthCells[i].hasHit) {
-			if (depthCells[i].hasClampedHit) {
-				depthColor = Color::Green;
-			}
-			else {
-				depthColor = Color::Red;
-			}
-		}
 		addColoredPoint(
 			depthPointsMesh,
 			depthPoint,
-			depthColor);
+			moldCheckCellDebugColor(depthCells[i]));
 	}
 
 	const std::filesystem::path debugOutputDir =

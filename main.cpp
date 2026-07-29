@@ -449,21 +449,10 @@ MoldCheckMetrics moldCheck(
                 depthCells[i].cellCenter +
                 direction * depthCells[i].distance;
 
-            Color depthColor = Color::White;
-
-            if (depthCells[i].hasHit) {
-                if (depthCells[i].hasClampedHit) {
-                    depthColor = Color::Green;
-                }
-                else {
-                    depthColor = Color::Red;
-                }
-            }
-
             addColoredPoint(
                 depthPointsMesh,
                 depthPoint,
-                depthColor);
+                moldCheckCellDebugColor(depthCells[i]));
         }
 
         const TriMesh planeMesh =
