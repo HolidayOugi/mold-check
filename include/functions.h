@@ -669,42 +669,6 @@ static std::vector<CellData> fixDepthCellConeViolations(
 	return depthCells;
 }
 
-static std::vector<CellData> enforceMaximumOriginalMeshDistance(
-	const std::vector<CellData>& cells,
-	std::vector<CellData> depthCells,
-	const vcl::Point3d& direction)
-{
-	using namespace vcl;
-
-	if (depthCells.size() != cells.size()) {
-		return depthCells;
-	}
-
-	std::vector<uint> allCells(depthCells.size());
-	std::iota(allCells.begin(), allCells.end(), 0);
-
-	parallelFor(allCells, [&](uint idx) {
-		if (!std::isfinite(cells[idx].distance)) {
-			return;
-		}
-
-		if (std::isfinite(depthCells[idx].distance) &&
-			depthCells[idx].distance > cells[idx].distance) {
-			depthCells[idx].distance = cells[idx].distance;
-			depthCells[idx].hitPoints = {
-				depthCells[idx].cellCenter +
-				direction * depthCells[idx].distance};
-		}
-
-		if (depthCells[idx].hasClampedHit &&
-			std::isfinite(depthCells[idx].clampedDistance) &&
-			depthCells[idx].clampedDistance > cells[idx].distance) {
-			depthCells[idx].clampedDistance = cells[idx].distance;
-		}
-	});
-
-	return depthCells;
-}
 static std::vector<CellData> clampOrangeDepthCellsFromBorder(
 	const std::vector<CellData>& cells,
 	std::vector<CellData> depthCells,
@@ -784,7 +748,8 @@ static std::vector<CellData> clampOrangeDepthCellsFromBorder(
 			continue;
 		}
 
-		depthCells[idx].distance = cells[idx].distance;
+		depthCells[idx].distance =
+			cells[idx].distance + 0.003 * maxDistance;
 		depthCells[idx].hitPoints = {
 			depthCells[idx].cellCenter +
 			direction * depthCells[idx].distance};
@@ -820,13 +785,13 @@ static std::vector<CellData> postProcessWhiteDepthCells(
 		return depthCells;
 	}
 
-	std::vector<double> safetyDistances(depthCells.size(), 0.0);
-	std::vector<uint> candidates;
+	std::vector<uint> allCells(depthCells.size());
+	std::iota(allCells.begin(), allCells.end(), 0);
 
-	for (uint idx = 0; idx < depthCells.size(); ++idx) {
+	parallelFor(allCells, [&](uint idx) {
 		if (depthCells[idx].hasHit ||
 			depthCells[idx].distance <= cells[idx].distance) {
-			continue;
+			return;
 		}
 
 		bool hasAdjacentHit = false;
@@ -839,117 +804,11 @@ static std::vector<CellData> postProcessWhiteDepthCells(
 		});
 
 		if (hasAdjacentHit) {
-			continue;
+			return;
 		}
 
-		safetyDistances[idx] =
+		depthCells[idx].distance =
 			cells[idx].distance - 0.01 * maxDistance;
-		candidates.push_back(idx);
-	}
-
-	if (candidates.empty()) {
-		return depthCells;
-	}
-
-	// Keep exactly half of the original candidates.  Start from the less
-	// populated checkerboard parity for spatial coverage, then complete the
-	// set with the most conservative remaining candidates.
-	std::sort(
-		candidates.begin(),
-		candidates.end(),
-		[&](uint left, uint right) {
-			return safetyDistances[left] < safetyDistances[right];
-		});
-
-	std::array<size_t, 2> parityCounts = {0, 0};
-	for (uint idx : candidates) {
-		const uint row = idx / grid.cols;
-		const uint col = idx % grid.cols;
-		++parityCounts[(row + col) % 2];
-	}
-
-	const uint selectedParity =
-		parityCounts[0] <= parityCounts[1] ? 0 : 1;
-	const size_t targetSampleCount = (candidates.size() + 1) / 2;
-	std::vector<unsigned char> isSample(depthCells.size(), false);
-	std::vector<uint> sampleIds;
-	sampleIds.reserve(targetSampleCount);
-
-	for (uint idx : candidates) {
-		const uint row = idx / grid.cols;
-		const uint col = idx % grid.cols;
-		if ((row + col) % 2 != selectedParity) {
-			continue;
-		}
-
-		isSample[idx] = true;
-		sampleIds.push_back(idx);
-	}
-
-	for (uint idx : candidates) {
-		if (sampleIds.size() >= targetSampleCount) {
-			break;
-		}
-		if (isSample[idx]) {
-			continue;
-		}
-
-		isSample[idx] = true;
-		sampleIds.push_back(idx);
-	}
-
-	std::vector<double> currentSampleDistances(depthCells.size(), 0.0);
-	std::vector<double> nextSampleDistances(depthCells.size(), 0.0);
-	for (uint idx : sampleIds) {
-		currentSampleDistances[idx] = safetyDistances[idx];
-	}
-
-	// Smooth only the sparse control samples on a broad neighborhood.  Their
-	// safety value remains an upper bound, so smoothing cannot move a sample
-	// back toward or through the mesh.
-	const uint smoothingIterations = 30;
-	const uint smoothingSquareSize = 21;
-	const double safetyWeight = 0.15;
-
-	for (uint iteration = 0; iteration < smoothingIterations; ++iteration) {
-		nextSampleDistances = currentSampleDistances;
-
-		for (uint idx : sampleIds) {
-			double neighborDistanceSum = 0.0;
-			uint neighborCount = 0;
-			forEachSquareNeighbor(
-				idx,
-				grid,
-				smoothingSquareSize,
-				[&](uint neighborIdx) {
-					if (isSample[neighborIdx]) {
-						neighborDistanceSum +=
-							currentSampleDistances[neighborIdx];
-						++neighborCount;
-					}
-					return true;
-				});
-
-			if (neighborCount == 0) {
-				continue;
-			}
-
-			const double neighborAverage =
-				neighborDistanceSum / static_cast<double>(neighborCount);
-			const double smoothedDistance =
-				safetyWeight * safetyDistances[idx] +
-				(1.0 - safetyWeight) * neighborAverage;
-
-			nextSampleDistances[idx] = std::min(
-				smoothedDistance,
-				safetyDistances[idx]);
-		}
-
-		currentSampleDistances.swap(nextSampleDistances);
-	}
-
-	for (uint idx : sampleIds) {
-		depthCells[idx].distance = currentSampleDistances[idx];
 		depthCells[idx].hitPoints = {
 			depthCells[idx].cellCenter +
 			direction * depthCells[idx].distance};
@@ -958,12 +817,7 @@ static std::vector<CellData> postProcessWhiteDepthCells(
 		if (movedWhiteAnchors != nullptr) {
 			(*movedWhiteAnchors)[idx] = true;
 		}
-	}
-
-	std::cout << "  sparse moved white anchors: candidates "
-			  << candidates.size()
-			  << ", samples " << sampleIds.size() << "\n";
-	std::cout.flush();
+	});
 
 	return depthCells;
 }
@@ -2007,16 +1861,7 @@ static std::vector<CellData> makeDepthCells(
 			direction,
 			maxDistance);
 	
-	depthCells = fixDepthCellConeViolations(
-		depthCells,
-		direction,
-		coneCosThreshold,
-		eps);
-
-	depthCells = enforceMaximumOriginalMeshDistance(
-		cells,
-		depthCells,
-		direction);
+	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 	
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 15
