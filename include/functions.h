@@ -669,12 +669,13 @@ static std::vector<CellData> fixDepthCellConeViolations(
 	return depthCells;
 }
 
-static std::vector<CellData> clampOrangeDepthCellsFromBorder(
+static std::vector<CellData> clampRedDepthCells(
 	const std::vector<CellData>& cells,
 	std::vector<CellData> depthCells,
 	const GridChoice& grid,
 	const vcl::Point3d& direction,
-	double maxDistance)
+	double maxDistance,
+	const std::string& debugResultsSubdir)
 {
 	using namespace vcl;
 
@@ -684,83 +685,87 @@ static std::vector<CellData> clampOrangeDepthCellsFromBorder(
 		return depthCells;
 	}
 
-	std::vector<unsigned char> isOutsideOrange(depthCells.size(), false);
-	std::vector<unsigned char> isReachedFromWhiteBorder(
-		depthCells.size(),
-		false);
-	std::vector<uint> pendingCells;
+	std::vector<unsigned char> isCandidate(depthCells.size(), false);
+	std::vector<unsigned char> isVisited(depthCells.size(), false);
+	PolyMesh connectedGroupsMesh;
+	connectedGroupsMesh.enablePerVertexColor();
 
 	for (uint idx = 0; idx < depthCells.size(); ++idx) {
-		isOutsideOrange[idx] =
+		isCandidate[idx] =
 			depthCells[idx].hasHit &&
-			!depthCells[idx].hasClampedHit &&
-			depthCells[idx].isBiharmonicFilledHit &&
 			std::isfinite(depthCells[idx].distance) &&
 			std::isfinite(cells[idx].distance) &&
-			depthCells[idx].distance < cells[idx].distance;
+			depthCells[idx].distance <
+				cells[idx].distance;
+	}
 
-		if (!isOutsideOrange[idx]) {
+	for (uint seedIdx = 0; seedIdx < depthCells.size(); ++seedIdx) {
+		if (!isCandidate[seedIdx] || isVisited[seedIdx]) {
 			continue;
 		}
 
+		std::vector<uint> component;
+		std::vector<uint> pendingCells = {seedIdx};
 		bool touchesWhiteCell = false;
-		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
-			if (!depthCells[neighborIdx].hasHit) {
-				touchesWhiteCell = true;
-				return false;
-			}
-			return true;
-		});
+		isVisited[seedIdx] = true;
+
+		while (!pendingCells.empty()) {
+			const uint idx = pendingCells.back();
+			pendingCells.pop_back();
+			component.push_back(idx);
+
+			forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
+				if (!depthCells[neighborIdx].hasHit) {
+					touchesWhiteCell = true;
+					return true;
+				}
+
+				if (isCandidate[neighborIdx] &&
+					!isVisited[neighborIdx]) {
+					isVisited[neighborIdx] = true;
+					pendingCells.push_back(neighborIdx);
+				}
+				return true;
+			});
+		}
+
+		for (uint idx : component) {
+			addColoredPoint(
+				connectedGroupsMesh,
+				depthCells[idx].cellCenter +
+					direction * depthCells[idx].distance,
+				Color::Yellow);
+		}
 
 		if (touchesWhiteCell) {
-			isReachedFromWhiteBorder[idx] = true;
-			pendingCells.push_back(idx);
+			continue;
 		}
-	}
 
-	// Propagate only while the orange surface is still outside the mesh.
-	// As soon as it enters the mesh the flood stops, so a later outside
-	// pocket cannot be considered connected to the white border.
-	while (!pendingCells.empty()) {
-		const uint idx = pendingCells.back();
-		pendingCells.pop_back();
+		for (uint idx : component) {
+			depthCells[idx].distance =
+				cells[idx].distance + 0.003 * maxDistance;
+			depthCells[idx].hitPoints = {
+				depthCells[idx].cellCenter +
+				direction * depthCells[idx].distance};
+			depthCells[idx].isPostProcess = true;
 
-		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
-			if (isOutsideOrange[neighborIdx] &&
-				!isReachedFromWhiteBorder[neighborIdx]) {
-				isReachedFromWhiteBorder[neighborIdx] = true;
-				pendingCells.push_back(neighborIdx);
+			if (depthCells[idx].hasClampedHit) {
+				depthCells[idx].clampedDistance =
+					depthCells[idx].distance;
 			}
-			return true;
-		});
+		}
 	}
 
-	uint preservedBorderPointCount = 0;
-	uint clampedPointCount = 0;
-
-	for (uint idx = 0; idx < depthCells.size(); ++idx) {
-		if (!isOutsideOrange[idx]) {
-			continue;
-		}
-
-		if (isReachedFromWhiteBorder[idx]) {
-			++preservedBorderPointCount;
-			continue;
-		}
-
-		depthCells[idx].distance =
-			cells[idx].distance + 0.003 * maxDistance;
-		depthCells[idx].hitPoints = {
-			depthCells[idx].cellCenter +
-			direction * depthCells[idx].distance};
-		depthCells[idx].isPostProcess = true;
-		++clampedPointCount;
+	if (connectedGroupsMesh.vertexCount() > 0) {
+		const std::filesystem::path debugOutputDir =
+			std::filesystem::path(RESULTS_PATH) /
+			debugResultsSubdir;
+		std::filesystem::create_directories(debugOutputDir);
+		saveMesh(
+			connectedGroupsMesh,
+			(debugOutputDir /
+				"mold_check_clamp_connected_groups.ply").string());
 	}
-
-	std::cout << "  orange border flood: preserved "
-			  << preservedBorderPointCount
-			  << ", clamped " << clampedPointCount << "\n";
-	std::cout.flush();
 
 	return depthCells;
 }
@@ -1854,12 +1859,13 @@ static std::vector<CellData> makeDepthCells(
 			*debugStepIndex);
 	}
 	depthCells =
-		clampOrangeDepthCellsFromBorder(
+		clampRedDepthCells(
 			cells,
 			depthCells,
 			grid,
 			direction,
-			maxDistance);
+			maxDistance,
+			debugResultsSubdir);
 	
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 	
