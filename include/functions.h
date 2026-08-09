@@ -1144,7 +1144,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 			0.003 * maxDistance :
 			std::max<double>(1e-6, 100.0 * eps);
 
-	std::vector<unsigned char> hasInteriorDepthConstraint(depthCells.size(), false);
+	std::vector<unsigned char> isFixedOutsideOrange(depthCells.size(), false);
 	for (uint idx = 0; idx < depthCells.size(); ++idx) {
 		if (!std::isfinite(depthCells[idx].distance)) {
 			continue;
@@ -1174,24 +1174,37 @@ static std::vector<CellData> biharmonicFillHitCells(
 				static_cast<double>(hitDistance) /
 				static_cast<double>(collarRadius + 1);
 		}
-		hasInteriorDepthConstraint[idx] =
+		isFixedOutsideOrange[idx] =
 			depthCells[idx].hasHit &&
 			!depthCells[idx].hasClampedHit &&
 			std::isfinite(cells[idx].distance) &&
+			depthCells[idx].distance < cells[idx].distance &&
 			isAtLeastDistanceFromWhiteBoundary(idx, 3);
 
-		if (hasInteriorDepthConstraint[idx]) {
+		if (isFixedOutsideOrange[idx]) {
 			CellData& constrainedCell = depthCells[idx];
-			constrainedCell.distance =
+			double constrainedDistance =
 				cells[idx].distance + depthConstraintMargin;
+
+			if (cells[idx].hitPoints.size() > 1) {
+				const double lastHitDistance =
+					(cells[idx].hitPoints.back() -
+					 cells[idx].cellCenter).dot(direction);
+				if (std::isfinite(lastHitDistance)) {
+					constrainedDistance = std::min(
+						constrainedDistance,
+						lastHitDistance - 0.003 * maxDistance);
+				}
+			}
+
+			constrainedCell.distance = constrainedDistance;
 			constrainedCell.hitPoints = {
 				constrainedCell.cellCenter + direction * constrainedCell.distance};
 			constrainedCell.isBiharmonicFilledHit = true;
 		}
 
-
 		if (isFixedWhiteAnchor ||
-			hasInteriorDepthConstraint[idx] ||
+			isFixedOutsideOrange[idx] ||
 			depthCells[idx].hasClampedHit ||
 			(!depthCells[idx].hasHit && !isWeightedCollar)) {
 			continue;
@@ -2057,8 +2070,7 @@ static std::vector<CellData> makeDepthCells(
 			debugResultsSubdir);
 	*/	
 
-	enforceWhiteDepthUpperBounds(cells, depthCells, direction);
-	
+	//enforceWhiteDepthUpperBounds(cells, depthCells, direction);
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 15
 			depthCells,
