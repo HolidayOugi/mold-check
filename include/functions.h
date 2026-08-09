@@ -1688,6 +1688,7 @@ static std::vector<CellData> smoothMeshEdges(
 	return depthCells;
 }
 
+/*
 static std::vector<CellData> smoothMeshPits(
 	std::vector<CellData> depthCells,
 	const vcl::Point3d& direction,
@@ -1817,6 +1818,7 @@ static std::vector<vcl::uint> findIsolatedBiharmonicDepthPits(
 
 	return pitCellIds;
 }
+*/
 
 static void enforceWhiteDepthUpperBounds(
 	const std::vector<CellData>& originalCells,
@@ -1950,6 +1952,7 @@ static std::vector<CellData> makeDepthCells(
 		3,
 		maxDistance);
 
+/*
 	const std::vector<uint> pitCellIds =
 		findIsolatedBiharmonicDepthPits(cells, depthCells, grid, eps);
 
@@ -1980,6 +1983,7 @@ static std::vector<CellData> makeDepthCells(
 			depthCell.isPostProcess = false;
 		}
 	}
+*/
 
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 11

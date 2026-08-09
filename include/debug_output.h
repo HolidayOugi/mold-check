@@ -24,9 +24,9 @@ static void addColoredPoint(
 
 static vcl::Color moldCheckCellDebugColor(const CellData& cell)
 {
-	if (cell.isRemovedDepthPit) {
-		return vcl::Color::Black;
-	}
+	// if (cell.isRemovedDepthPit) {
+	// 	return vcl::Color::Black;
+	// }
 
 	if (cell.hasClampedHit) {
 		return vcl::Color::Green;
