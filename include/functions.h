@@ -12,6 +12,7 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <queue>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_set>
@@ -1194,6 +1195,198 @@ static std::vector<CellData> biharmonicFillHitCells(
 		fixedWhiteAnchors->size() == depthCells.size() &&
 		std::isfinite(maxDistance);
 
+	// Detect complete depressions in the incoming cutting surface. Distances
+	// grow away from the ray plane, so a geometric depression is a local basin
+	// of the cutting surface but a local maximum in this scalar field.
+	std::vector<double> basinUpperBounds(
+		depthCells.size(),
+		std::numeric_limits<double>::infinity());
+
+	if (useBoxConstraints && grid.rows > 1 && grid.cols > 1) {
+		std::vector<double> filledDistances(depthCells.size());
+		std::vector<unsigned char> floodVisited(depthCells.size(), false);
+		std::priority_queue<std::pair<double, uint>> floodFront;
+
+		for (uint idx = 0; idx < depthCells.size(); ++idx) {
+			filledDistances[idx] = depthCells[idx].distance;
+		}
+
+		const auto addFloodBoundary = [&](uint idx) {
+			if (floodVisited[idx]) {
+				return;
+			}
+			floodVisited[idx] = true;
+			if (std::isfinite(filledDistances[idx])) {
+				floodFront.push({filledDistances[idx], idx});
+			}
+		};
+
+		for (uint row = 0; row < grid.rows; ++row) {
+			addFloodBoundary(row * grid.cols);
+			addFloodBoundary(row * grid.cols + grid.cols - 1);
+		}
+		for (uint col = 0; col < grid.cols; ++col) {
+			addFloodBoundary(col);
+			addFloodBoundary((grid.rows - 1) * grid.cols + col);
+		}
+
+		const auto visitFloodNeighbor = [&](
+			uint neighborIdx,
+			double spillDistance) {
+			if (floodVisited[neighborIdx]) {
+				return;
+			}
+			floodVisited[neighborIdx] = true;
+			if (!std::isfinite(depthCells[neighborIdx].distance)) {
+				return;
+			}
+
+			filledDistances[neighborIdx] = std::min(
+				depthCells[neighborIdx].distance,
+				spillDistance);
+			floodFront.push({filledDistances[neighborIdx], neighborIdx});
+		};
+
+		while (!floodFront.empty()) {
+			const auto [spillDistance, idx] = floodFront.top();
+			floodFront.pop();
+
+			const uint row = idx / grid.cols;
+			const uint col = idx % grid.cols;
+			if (col > 0) {
+				visitFloodNeighbor(idx - 1, spillDistance);
+			}
+			if (col + 1 < grid.cols) {
+				visitFloodNeighbor(idx + 1, spillDistance);
+			}
+			if (row > 0) {
+				visitFloodNeighbor(idx - grid.cols, spillDistance);
+			}
+			if (row + 1 < grid.rows) {
+				visitFloodNeighbor(idx + grid.cols, spillDistance);
+			}
+		}
+
+		const double minimumCellSide = std::min(grid.sideU, grid.sideV);
+		const double minimumBasinProminence = std::max(
+			0.5 * minimumCellSide,
+			0.003 * maxDistance);
+		const double basinTolerance = std::max(
+			1e-10,
+			10.0 * eps);
+
+		std::vector<unsigned char> componentVisited(
+			depthCells.size(), false);
+		std::vector<unsigned char> isSelectedBasin(
+			depthCells.size(), false);
+		uint selectedBasinCount = 0;
+		uint selectedBasinCellCount = 0;
+		double maximumBasinLift = 0.0;
+
+		for (uint seedIdx = 0; seedIdx < depthCells.size(); ++seedIdx) {
+			const double seedLift =
+				depthCells[seedIdx].distance - filledDistances[seedIdx];
+			if (componentVisited[seedIdx] ||
+				!std::isfinite(seedLift) || seedLift <= basinTolerance) {
+				continue;
+			}
+
+			std::vector<uint> component;
+			std::vector<uint> pendingCells = {seedIdx};
+			componentVisited[seedIdx] = true;
+			double componentMaximumLift = 0.0;
+			double componentMaximumOrangeLift = 0.0;
+
+			while (!pendingCells.empty()) {
+				const uint idx = pendingCells.back();
+				pendingCells.pop_back();
+				component.push_back(idx);
+				componentMaximumLift = std::max(
+					componentMaximumLift,
+					depthCells[idx].distance - filledDistances[idx]);
+
+				if (depthCells[idx].hasHit) {
+					componentMaximumOrangeLift = std::max(
+						componentMaximumOrangeLift,
+						depthCells[idx].distance - filledDistances[idx]);
+				}
+
+				const uint row = idx / grid.cols;
+				const uint col = idx % grid.cols;
+				const auto addComponentNeighbor = [&](uint neighborIdx) {
+					const double lift = depthCells[neighborIdx].distance -
+						filledDistances[neighborIdx];
+					if (!componentVisited[neighborIdx] &&
+						std::isfinite(lift) && lift > basinTolerance) {
+						componentVisited[neighborIdx] = true;
+						pendingCells.push_back(neighborIdx);
+					}
+				};
+
+				if (col > 0) {
+					addComponentNeighbor(idx - 1);
+				}
+				if (col + 1 < grid.cols) {
+					addComponentNeighbor(idx + 1);
+				}
+				if (row > 0) {
+					addComponentNeighbor(idx - grid.cols);
+				}
+				if (row + 1 < grid.rows) {
+					addComponentNeighbor(idx + grid.cols);
+				}
+			}
+
+			if (componentMaximumLift < minimumBasinProminence ||
+				componentMaximumOrangeLift < minimumBasinProminence) {
+				continue;
+			}
+
+			++selectedBasinCount;
+			selectedBasinCellCount += static_cast<uint>(component.size());
+			maximumBasinLift = std::max(
+				maximumBasinLift,
+				componentMaximumLift);
+			for (uint idx : component) {
+				isSelectedBasin[idx] = true;
+			}
+		}
+
+		// The support collar prevents the final solve from making the filled
+		// depression wider by pulling its immediate surroundings deeper.
+		std::vector<unsigned char> isBasinSupport = isSelectedBasin;
+		for (uint layer = 0; layer < collarRadius; ++layer) {
+			std::vector<unsigned char> expandedSupport = isBasinSupport;
+			for (uint idx = 0; idx < depthCells.size(); ++idx) {
+				if (!isBasinSupport[idx]) {
+					continue;
+				}
+				const uint row = idx / grid.cols;
+				const uint col = idx % grid.cols;
+				if (col > 0) expandedSupport[idx - 1] = true;
+				if (col + 1 < grid.cols) expandedSupport[idx + 1] = true;
+				if (row > 0) expandedSupport[idx - grid.cols] = true;
+				if (row + 1 < grid.rows) expandedSupport[idx + grid.cols] = true;
+			}
+			isBasinSupport.swap(expandedSupport);
+		}
+
+		for (uint idx = 0; idx < depthCells.size(); ++idx) {
+			if (isSelectedBasin[idx]) {
+				basinUpperBounds[idx] = filledDistances[idx];
+			}
+			else if (isBasinSupport[idx]) {
+				basinUpperBounds[idx] = depthCells[idx].distance;
+			}
+		}
+
+		std::cout << "  depth basins constrained: "
+				  << selectedBasinCount
+				  << ", basin cells: " << selectedBasinCellCount
+				  << ", maximum lift: " << maximumBasinLift << "\n";
+		std::cout.flush();
+	}
+
 	std::vector<unsigned char> isFixedOutsideOrange(depthCells.size(), false);
 	for (uint idx = 0; idx < depthCells.size(); ++idx) {
 		if (!std::isfinite(depthCells[idx].distance)) {
@@ -1203,7 +1396,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 		const bool isFixedWhiteAnchor =
 			useBoxConstraints &&
 			(*fixedWhiteAnchors)[idx] &&
-			!depthCells[idx].hasHit;
+			!depthCells[idx].hasHit &&
+			!std::isfinite(basinUpperBounds[idx]);
 
 		const uint hitDistance =
 			depthCells[idx].hasHit ?
@@ -1257,7 +1451,9 @@ static std::vector<CellData> biharmonicFillHitCells(
 		if (isFixedWhiteAnchor ||
 			isFixedOutsideOrange[idx] ||
 			depthCells[idx].hasClampedHit ||
-			(!depthCells[idx].hasHit && !isWeightedCollar)) {
+			(!depthCells[idx].hasHit &&
+			 !isWeightedCollar &&
+			 !std::isfinite(basinUpperBounds[idx]))) {
 			continue;
 		}
 
@@ -1498,7 +1694,10 @@ static std::vector<CellData> biharmonicFillHitCells(
 			}
 			else {
 				// Layers 1-2 are free; orange cells from layer 3 must stay inside.
+				const bool isBasinConstrained =
+					std::isfinite(basinUpperBounds[cellIdx]);
 				const bool requiresInteriorDepth =
+					!isBasinConstrained &&
 					isAtLeastDistanceFromWhiteBoundary(cellIdx, 3);
 				if (requiresInteriorDepth &&
 					std::isfinite(surfaceCell.distance)) {
@@ -1524,6 +1723,18 @@ static std::vector<CellData> biharmonicFillHitCells(
 								surfaceCell.distance + availableMargin;
 						}
 					}
+				}
+			}
+
+			// The basin ceiling is part of this solve. Basin cells rise to at
+			// least their spill surface; support cells may rise but cannot deepen.
+			if (std::isfinite(basinUpperBounds[cellIdx])) {
+				upperBounds(variableIdx) = std::min(
+					upperBounds(variableIdx),
+					basinUpperBounds[cellIdx]);
+				if (lowerBounds(variableIdx) > upperBounds(variableIdx)) {
+					lowerBounds(variableIdx) =
+					-std::numeric_limits<double>::infinity();
 				}
 			}
 
