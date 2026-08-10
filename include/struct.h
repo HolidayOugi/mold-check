@@ -29,9 +29,7 @@ struct CellData
 	bool hasHit = false;
 	bool hasClampedHit = false;
 	bool isBiharmonicFilledHit = false;
-	// bool isRemovedDepthPit = false;
 	bool isMovedForward = false;
-	bool isPostProcess = false;
 	double clampedDistance = 0.0;
 };
 
@@ -40,14 +38,6 @@ struct HitCellShapeData
 	double area = 0.0;
 	double perimeter = 0.0;
 	double compactness = 0.0;
-};
-
-struct PullPushLevel
-{
-	vcl::uint rows = 0;
-	vcl::uint cols = 0;
-	std::vector<double> distances;
-	std::vector<double> weights;
 };
 
 #endif

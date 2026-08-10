@@ -310,41 +310,6 @@ static bool forEachSquareNeighbor(
 	return true;
 }
 
-static std::vector<vcl::uint> crossNeighborIndices(
-	vcl::uint idx,
-	const GridChoice& grid)
-{
-	using namespace vcl;
-
-	std::vector<uint> neighbors;
-	neighbors.reserve(4);
-
-	forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
-		neighbors.push_back(neighborIdx);
-		return true;
-	});
-
-	return neighbors;
-}
-
-static std::vector<vcl::uint> squareNeighborIndices(
-	vcl::uint idx,
-	const GridChoice& grid,
-	vcl::uint squareSize)
-{
-	using namespace vcl;
-
-	std::vector<uint> neighbors;
-	neighbors.reserve(squareSize * squareSize - 1);
-
-	forEachSquareNeighbor(idx, grid, squareSize, [&](uint neighborIdx) {
-		neighbors.push_back(neighborIdx);
-		return true;
-	});
-
-	return neighbors;
-}
-
 static void erodeHitMaskOnce(
 	std::vector<CellData>& cells,
 	const GridChoice& grid)
@@ -403,40 +368,6 @@ static void dilateHitMaskOnce(
 	parallelFor(allCells, [&](uint idx) {
 		cells[idx].hasHit = nextHasHit[idx];
 	});
-}
-
-static std::vector<std::vector<vcl::uint>> removeDistanceJumpPoints(
-	const std::vector<CellData>& cells,
-	const GridChoice& grid,
-	double distanceThreshold)
-{
-	using namespace vcl;
-
-	if (distanceThreshold <= 0.0) {
-		distanceThreshold = std::numeric_limits<double>::infinity();
-	}
-
-	std::vector<std::vector<uint>> connectedNeighbors(cells.size());
-	for (uint idx = 0; idx < cells.size(); ++idx) {
-		if (!cells[idx].hasHit) {
-			continue;
-		}
-
-		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
-			if (neighborIdx <= idx || !cells[neighborIdx].hasHit) {
-				return true;
-			}
-
-			if (std::abs(cells[idx].distance - cells[neighborIdx].distance) <=
-				distanceThreshold) {
-				connectedNeighbors[idx].push_back(neighborIdx);
-				connectedNeighbors[neighborIdx].push_back(idx);
-			}
-			return true;
-		});
-	}
-
-	return connectedNeighbors;
 }
 
 static std::vector<std::vector<vcl::uint>> removeAngleJumpPoints(
@@ -955,71 +886,6 @@ static std::vector<CellData> cutProtrusions(
 	}
 
 	return keepLargestHitComponent(cells, connectedNeighbors);
-}
-
-static double interpolateFromCoarseLevel(
-	const PullPushLevel& coarse,
-	vcl::uint fineRow,
-	vcl::uint fineCol,
-	vcl::uint fineRows,
-	vcl::uint fineCols)
-{
-	const double coarseRow =
-		(static_cast<double>(fineRow) + 0.5) *
-		static_cast<double>(coarse.rows) /
-		static_cast<double>(fineRows) - 0.5;
-
-	const double coarseCol =
-		(static_cast<double>(fineCol) + 0.5) *
-		static_cast<double>(coarse.cols) /
-		static_cast<double>(fineCols) - 0.5;
-
-	const int row0 = static_cast<int>(std::floor(coarseRow));
-	const int col0 = static_cast<int>(std::floor(coarseCol));
-
-	double weightedDistanceSum = 0.0;
-	double weightSum = 0.0;
-
-	for (int rowOffset = 0; rowOffset <= 1; ++rowOffset) {
-		for (int colOffset = 0; colOffset <= 1; ++colOffset) {
-			const int sampleRow = row0 + rowOffset;
-			const int sampleCol = col0 + colOffset;
-
-			if (sampleRow < 0 ||
-				sampleCol < 0 ||
-				sampleRow >= static_cast<int>(coarse.rows) ||
-				sampleCol >= static_cast<int>(coarse.cols)) {
-				continue;
-			}
-
-			const double rowWeight =
-				std::max(0.0, 1.0 - std::abs(coarseRow - sampleRow));
-
-			const double colWeight =
-				std::max(0.0, 1.0 - std::abs(coarseCol - sampleCol));
-
-			const double interpolationWeight = rowWeight * colWeight;
-
-			const vcl::uint sampleIndex =
-				static_cast<vcl::uint>(sampleRow) * coarse.cols +
-				static_cast<vcl::uint>(sampleCol);
-
-			const double weight =
-				interpolationWeight * coarse.weights[sampleIndex];
-
-			weightedDistanceSum += coarse.distances[sampleIndex] * weight;
-			weightSum += weight;
-		}
-	}
-
-	if (weightSum > 0.0) {
-		return weightedDistanceSum / weightSum;
-	}
-
-	const vcl::uint parentRow = std::min(fineRow / 2, coarse.rows - 1);
-	const vcl::uint parentCol = std::min(fineCol / 2, coarse.cols - 1);
-
-	return coarse.distances[parentRow * coarse.cols + parentCol];
 }
 
 #endif

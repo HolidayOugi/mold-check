@@ -24,10 +24,6 @@ static void addColoredPoint(
 
 static vcl::Color moldCheckCellDebugColor(const CellData& cell)
 {
-	// if (cell.isRemovedDepthPit) {
-	// 	return vcl::Color::Black;
-	// }
-
 	if (cell.hasClampedHit) {
 		return vcl::Color::Green;
 	}
@@ -38,10 +34,6 @@ static vcl::Color moldCheckCellDebugColor(const CellData& cell)
 		}
 
 		return vcl::Color::White;
-	}
-
-	if (cell.isPostProcess) {
-		return vcl::Color(128, 0, 128);
 	}
 
 	if (cell.isBiharmonicFilledHit) {
@@ -124,14 +116,9 @@ vcl::PolyMesh validateClampedCells(
 			return;
 		}
 
-		//if (!cells[i].hasHit) {
-		//	return;
-		//}
-
 		const Point3d& point = cells[i].hitPoints[0];
 
 		for (uint j = 0; j < cells.size(); ++j) {
-			//if (i == j || !cells[j].hasHit) {
 			if (i == j || cells[j].hitPoints.empty()) {
 				continue;
 			}
@@ -275,53 +262,6 @@ static vcl::TriMesh createMoldSurface(
 	return tm;
 }
 
-
-
-static void addQuadPrism(
-	vcl::TriMesh& tm,
-	const std::array<vcl::Point3d, 4>& baseCorners,
-	double startOffset,
-	double endOffset,
-	const vcl::Point3d& dir,
-	const vcl::Color& faceColor)
-{
-	using namespace vcl;
-
-	tm.enablePerFaceColor();
-
-	std::array<Point3d, 4> b;
-	std::array<Point3d, 4> t;
-
-	for (uint k = 0; k < 4; ++k) {
-		b[k] = baseCorners[k] + dir * startOffset;
-		t[k] = baseCorners[k] + dir * endOffset;
-	}
-
-	std::array<uint, 8> ids;
-
-	for (uint k = 0; k < 4; ++k) {
-		ids[k + 0] = tm.addVertex(b[k]);
-		ids[k + 4] = tm.addVertex(t[k]);
-	}
-
-	addFaceWithColor(tm, ids[0], ids[2], ids[1], faceColor);
-	addFaceWithColor(tm, ids[0], ids[3], ids[2], faceColor);
-
-	addFaceWithColor(tm, ids[4], ids[5], ids[6], faceColor);
-	addFaceWithColor(tm, ids[4], ids[6], ids[7], faceColor);
-
-	addFaceWithColor(tm, ids[0], ids[1], ids[5], faceColor);
-	addFaceWithColor(tm, ids[0], ids[5], ids[4], faceColor);
-
-	addFaceWithColor(tm, ids[1], ids[2], ids[6], faceColor);
-	addFaceWithColor(tm, ids[1], ids[6], ids[5], faceColor);
-
-	addFaceWithColor(tm, ids[2], ids[3], ids[7], faceColor);
-	addFaceWithColor(tm, ids[2], ids[7], ids[6], faceColor);
-
-	addFaceWithColor(tm, ids[3], ids[0], ids[4], faceColor);
-	addFaceWithColor(tm, ids[3], ids[4], ids[7], faceColor);
-}
 
 
 static vcl::TriMesh makeDebugPlaneMesh(
