@@ -38,7 +38,9 @@
 
 #include "include/struct.h"
 #include "include/helper.h"
-#include "include/functions.h"
+#include "include/rays.h"
+#include "include/reduce.h"
+#include "include/depth.h"
 #include "include/debug_output.h"
 
 struct MoldCheckMetrics
