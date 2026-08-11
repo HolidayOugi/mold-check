@@ -163,6 +163,7 @@ static BiharmonicCellSelection biharmonicSelectWhiteFillCells(
 {
 	using namespace vcl;
 
+	// Start with no variables or anchors selected.
 	BiharmonicCellSelection selection;
 	selection.variableIds.assign(depthCells.size(), -1);
 	selection.fixedIdsMask.assign(depthCells.size(), false);
@@ -293,17 +294,20 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 {
 	using namespace vcl;
 
+	// Start with no variables or anchors selected.
 	BiharmonicCellSelection selection;
 	selection.variableIds.assign(depthCells.size(), -1);
 	selection.fixedIdsMask.assign(depthCells.size(), false);
 	selection.originalDistanceWeights.assign(depthCells.size(), 1.0);
 	selection.variableCellIds.reserve(depthCells.size());
 
+	// Small safety margin used when an orange point must stay inside the mesh.
 	const double depthConstraintMargin =
 		std::isfinite(maxDistance) ?
 			0.003 * maxDistance :
 			std::max<double>(1e-6, 100.0 * eps);
 
+	// Refresh inside/outside state before deciding which hit cells can move.
 	updateDepthCellInsideFlags(cells, depthCells, eps);
 
 	for (uint idx = 0; idx < depthCells.size(); ++idx) {
@@ -311,12 +315,14 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 			continue;
 		}
 
+		// Cyan/forward-capped whites stay fixed during the constrained hit pass.
 		const bool isFixedWhiteAnchor =
 			useBoxConstraints &&
 			fixedWhiteAnchors != nullptr &&
 			(*fixedWhiteAnchors)[idx] &&
 			!depthCells[idx].hasHit;
 
+		// White cells close to hits form a soft collar, so the transition stays smooth.
 		const uint hitDistance =
 			depthCells[idx].hasHit ?
 				0 :
@@ -327,6 +333,7 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 			collarRadius > 0 &&
 			hitDistance <= collarRadius;
 
+		// Real hit cells fully follow the solve; collar whites blend with their old value.
 		if (depthCells[idx].hasHit) {
 			selection.originalDistanceWeights[idx] = 0.0;
 		}
@@ -336,6 +343,7 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 				static_cast<double>(collarRadius + 1);
 		}
 
+		// Deep orange points that accidentally moved outside are fixed back inside.
 		const bool isFixedOutsideOrange =
 			!useBoxConstraints &&
 			depthCells[idx].hasHit &&
@@ -349,6 +357,7 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 				3);
 
 		if (isFixedOutsideOrange) {
+			// Move it just after the first hit, but avoid crossing the last hit if present.
 			CellData& constrainedCell = depthCells[idx];
 			double constrainedDistance =
 				cells[idx].distance + depthConstraintMargin;
@@ -370,6 +379,7 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 			constrainedCell.isBiharmonicFilledHit = true;
 		}
 
+		// Skip fixed anchors, already-corrected orange points, and distant whites.
 		if (isFixedWhiteAnchor ||
 			isFixedOutsideOrange ||
 			depthCells[idx].hasClampedHit ||
@@ -377,13 +387,16 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 			continue;
 		}
 
+		// Everything left is a variable solved by the hit biharmonic pass.
 		selection.variableIds[idx] =
 			static_cast<int>(selection.variableCellIds.size());
 		selection.variableCellIds.push_back(idx);
 	}
 
+	// Some points may have been corrected, so refresh before collecting anchors.
 	updateDepthCellInsideFlags(cells, depthCells, eps);
 
+	// Add fixed cells around the solved region to stabilize the boundary.
 	biharmonicCollectFixedAnchors(
 		depthCells,
 		grid,
@@ -533,6 +546,7 @@ static BiharmonicSolveResult biharmonicSolveUnconstrained(
 	return result;
 }
 
+// Estimate a safe step size for the projected-gradient solver.
 static double biharmonicLipschitzUpperBound(
 	const Eigen::SparseMatrix<double>& system)
 {
@@ -561,6 +575,7 @@ static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 	BiharmonicSolveResult result;
 	result.distances = initialDistances;
 
+	// The Lipschitz value keeps each gradient step stable.
 	const double lipschitzConstant =
 		biharmonicLipschitzUpperBound(linearSystem.system);
 
@@ -570,15 +585,18 @@ static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 		return result;
 	}
 
+	// FISTA-style acceleration starts from the already clamped initial guess.
 	Eigen::VectorXd acceleratedDistances = result.distances;
 	double momentum = 1.0;
 	const double inverseLipschitz = 1.0 / lipschitzConstant;
+	// Match the normal CG budget scale, then cap it to avoid runaway solves.
 	const size_t requestedIterations =
 		std::max<size_t>(1000, static_cast<size_t>(result.distances.size()) * 2);
 	const int maximumIterations = static_cast<int>(
 		std::min<size_t>(60000, requestedIterations));
 
 	for (; result.iterations < maximumIterations; ++result.iterations) {
+		// Take one descent step and immediately project it into the hard bounds.
 		const Eigen::VectorXd gradient =
 			linearSystem.system * acceleratedDistances -
 			linearSystem.rhs;
@@ -591,6 +609,7 @@ static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 			return result;
 		}
 
+		// Stop when the projected solution stops changing enough.
 		result.error =
 			(nextDistances - result.distances).norm() /
 			std::max(1.0, result.distances.norm());
@@ -600,6 +619,7 @@ static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 			break;
 		}
 
+		// Update the acceleration term for the next projected step.
 		const double nextMomentum =
 			0.5 * (1.0 + std::sqrt(1.0 + 4.0 * momentum * momentum));
 		acceleratedDistances =
@@ -610,6 +630,7 @@ static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 		momentum = nextMomentum;
 	}
 
+	// Report the final projected-step error, not only the last iteration change.
 	const Eigen::VectorXd projectedDistances =
 		(result.distances - inverseLipschitz *
 			(linearSystem.system * result.distances - linearSystem.rhs))
@@ -686,6 +707,7 @@ static BiharmonicBounds biharmonicBuildHitBounds(
 	BiharmonicBounds bounds =
 		biharmonicMakeEmptyBounds(variableCellIds.size());
 
+	// Orange points that are clearly inside get this safety margin after the first hit.
 	const double depthConstraintMargin = 0.003 * maxDistance;
 
 	for (vcl::uint i = 0; i < variableCellIds.size(); ++i) {
@@ -696,12 +718,14 @@ static BiharmonicBounds biharmonicBuildHitBounds(
 		const CellData& surfaceCell = cells[cellIdx];
 
 		if (!depthCell.hasHit) {
+			// Whites can only move forward up to this distance cap.
 			if (std::isfinite(surfaceCell.distance)) {
 				bounds.upper(variableIdx) =
 					surfaceCell.distance - 0.01 * maxDistance;
 			}
 		}
 		else {
+			// Orange cells at least three cells from white boundary must stay inside.
 			const bool requiresInteriorDepth =
 				biharmonicIsAtLeastDistanceFromWhiteBoundary(
 					depthCells,
@@ -714,6 +738,7 @@ static BiharmonicBounds biharmonicBuildHitBounds(
 					surfaceCell.distance + depthConstraintMargin;
 			}
 
+			// If the ray exits the mesh later, keep the value before that last hit.
 			if (surfaceCell.hitPoints.size() > 1 &&
 				std::isfinite(surfaceCell.distance)) {
 				const double lastHitDistance =
@@ -738,6 +763,7 @@ static BiharmonicBounds biharmonicBuildHitBounds(
 	return bounds;
 }
 
+// Start the constrained solve from current values already projected into bounds.
 static Eigen::VectorXd biharmonicInitialDistances(
 	const std::vector<CellData>& depthCells,
 	const std::vector<vcl::uint>& variableCellIds,
@@ -749,6 +775,7 @@ static Eigen::VectorXd biharmonicInitialDistances(
 	for (vcl::uint i = 0; i < variableCellIds.size(); ++i) {
 		const Eigen::Index variableIdx =
 			static_cast<Eigen::Index>(i);
+		// Clamp the starting value so the solver begins from a valid state.
 		double initialDistance = depthCells[variableCellIds[i]].distance;
 		initialDistance = std::max(
 			initialDistance,
@@ -859,7 +886,7 @@ static void biharmonicApplyHitSolution(
 	updateDepthCellInsideFlags(cells, depthCells, eps);
 }
 
-static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
+static std::vector<CellData> biharmonicFillWhiteCells(
 	const std::vector<CellData>& cells,
 	std::vector<CellData> depthCells,
 	const GridChoice& grid,
@@ -884,7 +911,7 @@ static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
 		return depthCells;
 	}
 
-	std::cout << "  biharmonic white cells from red cells. Unknown cells: "
+	std::cout << "  biharmonic white cells. Unknown cells: "
 			  << selection.variableCellIds.size()
 			  << ", fixed anchor cells: " << selection.fixedCellIds.size()
 			  << "\n";
