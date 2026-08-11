@@ -44,6 +44,7 @@ struct BiharmonicBounds
 	Eigen::VectorXd upper;
 };
 
+// Recompute the current inside/outside state from the first mesh hit only.
 static void updateDepthCellInsideFlags(
 	const std::vector<CellData>& cells,
 	std::vector<CellData>& depthCells,
@@ -154,6 +155,7 @@ static bool biharmonicIsAtLeastDistanceFromWhiteBoundary(
 	return true;
 }
 
+// Select white cells as unknowns and nearby red/original hits as anchors.
 static BiharmonicCellSelection biharmonicSelectWhiteFillCells(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& depthCells,
@@ -277,6 +279,7 @@ static void biharmonicCollectFixedAnchors(
 	}
 }
 
+// Select orange/hit cells and collar whites that may move in the hit pass.
 static BiharmonicCellSelection biharmonicSelectHitFillCells(
 	const std::vector<CellData>& cells,
 	std::vector<CellData>& depthCells,
@@ -390,6 +393,7 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 	return selection;
 }
 
+// Build the shared biharmonic least-squares system from variables and anchors.
 static BiharmonicLinearSystem biharmonicBuildSystem(
 	const std::vector<CellData>& depthCells,
 	const GridChoice& grid,
@@ -500,6 +504,7 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 	return linearSystem;
 }
 
+// Fast path: solve the unconstrained biharmonic system with Eigen CG.
 static BiharmonicSolveResult biharmonicSolveUnconstrained(
 	const BiharmonicLinearSystem& linearSystem,
 	size_t variableCount)
@@ -547,6 +552,7 @@ static double biharmonicLipschitzUpperBound(
 	return lipschitzConstant;
 }
 
+// Bound path: project each step into the hard distance bounds.
 static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 	const BiharmonicLinearSystem& linearSystem,
 	const Eigen::VectorXd& initialDistances,
@@ -570,7 +576,7 @@ static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 	const size_t requestedIterations =
 		std::max<size_t>(1000, static_cast<size_t>(result.distances.size()) * 2);
 	const int maximumIterations = static_cast<int>(
-		std::min<size_t>(20000, requestedIterations));
+		std::min<size_t>(60000, requestedIterations));
 
 	for (; result.iterations < maximumIterations; ++result.iterations) {
 		const Eigen::VectorXd gradient =
@@ -630,6 +636,7 @@ static BiharmonicBounds biharmonicMakeEmptyBounds(size_t variableCount)
 	return bounds;
 }
 
+// Add optional white forward distance caps before choosing the solver.
 static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& depthCells,
@@ -667,6 +674,7 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 		bounds);
 }
 
+// Build hard bounds that keep inside orange points safely inside the mesh.
 static BiharmonicBounds biharmonicBuildHitBounds(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& depthCells,
@@ -754,6 +762,7 @@ static Eigen::VectorXd biharmonicInitialDistances(
 	return initialDistances;
 }
 
+// Write solved white distances back and mark forward-capped whites as cyan.
 static void biharmonicApplyWhiteSolution(
 	const std::vector<CellData>& cells,
 	std::vector<CellData>& depthCells,
@@ -792,6 +801,7 @@ static void biharmonicApplyWhiteSolution(
 	updateDepthCellInsideFlags(cells, depthCells, eps);
 }
 
+// Write solved hit distances back and preserve the smooth collar blend when unconstrained.
 static void biharmonicApplyHitSolution(
 	const std::vector<CellData>& cells,
 	std::vector<CellData>& depthCells,
@@ -862,8 +872,10 @@ static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
 		return depthCells;
 	}
 
+	// Keep inside flags coherent before selecting unknowns and anchors.
 	updateDepthCellInsideFlags(cells, depthCells, eps);
 
+	// Pick white variables and fixed hit anchors for this pass.
 	BiharmonicCellSelection selection =
 		biharmonicSelectWhiteFillCells(cells, depthCells, grid);
 
@@ -878,6 +890,7 @@ static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
 			  << "\n";
 	std::cout.flush();
 
+	// Build the same biharmonic system used by both passes.
 	const BiharmonicLinearSystem linearSystem =
 		biharmonicBuildSystem(
 			depthCells,
@@ -908,6 +921,7 @@ static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
 			  << ", error: " << solveResult.error << "\n";
 	std::cout.flush();
 
+	// Store the solution and update debug/state flags.
 	biharmonicApplyWhiteSolution(
 		cells,
 		depthCells,
@@ -938,13 +952,16 @@ static std::vector<CellData> biharmonicFillHitCells(
 		return depthCells;
 	}
 
+	// Recompute inside state because orange cells may now be outside or inside.
 	updateDepthCellInsideFlags(cells, depthCells, eps);
 
+	// The second hit pass uses hard bounds when cyan anchors are fixed.
 	const bool useBoxConstraints =
 		fixedWhiteAnchors != nullptr &&
 		fixedWhiteAnchors->size() == depthCells.size() &&
 		std::isfinite(maxDistance);
 
+	// Pick movable hit cells, weighted collar whites, and fixed anchors.
 	BiharmonicCellSelection selection =
 		biharmonicSelectHitFillCells(
 			cells,
@@ -968,6 +985,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 			  << "\n";
 	std::cout.flush();
 
+	// Build the same biharmonic system used by both passes.
 	const BiharmonicLinearSystem linearSystem =
 		biharmonicBuildSystem(
 			depthCells,
@@ -981,6 +999,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 	std::cout << "  biharmonic sparse solve start\n";
 	std::cout.flush();
 
+	// Use plain CG unless hard bounds are required by the second pass.
 	BiharmonicSolveResult solveResult;
 	if (!useBoxConstraints) {
 		solveResult = biharmonicSolveUnconstrained(
@@ -1016,6 +1035,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 			  << ", error: " << solveResult.error << "\n";
 	std::cout.flush();
 
+	// Store hit/orange results and refresh color/state flags.
 	biharmonicApplyHitSolution(
 		cells,
 		depthCells,

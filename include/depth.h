@@ -88,6 +88,79 @@ static std::vector<CellData> fixDepthCellConeViolations(
 	return depthCells;
 }
 
+static std::vector<CellData> stabilizeCellBorders(
+	const std::vector<CellData>& surfaceCells,
+	std::vector<CellData> depthCells,
+	const vcl::Point3d& direction,
+	const GridChoice& grid,
+	vcl::uint hitSearchRadius,
+	float eps,
+	double maxDistance)
+{
+	using namespace vcl;
+
+	if (surfaceCells.size() != depthCells.size() ||
+		depthCells.size() != grid.rows * grid.cols ||
+		grid.rows < 3 ||
+		grid.cols < 3) {
+		return depthCells;
+	}
+
+	const std::vector<CellData> originalDepthCells = depthCells;
+	for (uint idx = 0; idx < depthCells.size(); ++idx) {
+		const uint row = idx / grid.cols;
+		const uint col = idx % grid.cols;
+		const bool isBorder =
+			row == 0 ||
+			col == 0 ||
+			row + 1 == grid.rows ||
+			col + 1 == grid.cols;
+		if (!isBorder) {
+			continue;
+		}
+
+		const uint nearestHitDistance = biharmonicNearestHitCellDistance(
+			surfaceCells,
+			grid,
+			idx,
+			hitSearchRadius);
+		if (nearestHitDistance <= hitSearchRadius) {
+			continue;
+		}
+
+		const uint innerRow = std::clamp<uint>(row, 1, grid.rows - 2);
+		const uint innerCol = std::clamp<uint>(col, 1, grid.cols - 2);
+		const uint innerIdx = innerRow * grid.cols + innerCol;
+		const double stableDistance = originalDepthCells[innerIdx].distance;
+		if (!std::isfinite(stableDistance)) {
+			continue;
+		}
+
+		CellData& borderCell = depthCells[idx];
+		borderCell.distance = stableDistance;
+		borderCell.hitPoints = {
+			borderCell.cellCenter + direction * borderCell.distance};
+		borderCell.clampedDistance = borderCell.distance;
+		borderCell.hasClampedHit = false;
+
+		if (!surfaceCells[idx].hasHit &&
+			std::isfinite(surfaceCells[idx].distance) &&
+			std::isfinite(maxDistance)) {
+			const double forwardCap =
+				surfaceCells[idx].distance - 0.01 * maxDistance;
+			const double activeTolerance = std::max(
+				1e-10,
+				10.0 * static_cast<double>(eps) *
+					std::max(1.0, std::abs(forwardCap)));
+			borderCell.isMovedForward =
+				borderCell.distance >= forwardCap - activeTolerance;
+		}
+	}
+
+	updateDepthCellInsideFlags(surfaceCells, depthCells, eps);
+	return depthCells;
+}
+
 static std::vector<CellData> makeDepthCells(
 	const std::vector<CellData>& cells,
 	const vcl::Point3d& direction,
@@ -185,7 +258,7 @@ static std::vector<CellData> makeDepthCells(
 			*debugStepIndex);
 	}
 
-	// Only white cells on their upper bound (cyan) remain fixed anchors.
+	// Only forward-capped white cells (cyan) remain fixed anchors.
 	std::vector<unsigned char> fixedBlueCells(depthCells.size(), false);
 	for (uint idx = 0; idx < surfaceCells.size(); ++idx) {
 		fixedBlueCells[idx] =
@@ -209,6 +282,16 @@ static std::vector<CellData> makeDepthCells(
 			debugResultsSubdir,
 			*debugStepIndex);
 	}
+
+	depthCells = stabilizeCellBorders(
+		surfaceCells,
+		depthCells,
+		direction,
+		grid,
+		10,
+		eps,
+		maxDistance);
+
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 14
 			depthCells,
