@@ -30,6 +30,7 @@ struct CellData
 	bool hasClampedHit = false;
 	bool isBiharmonicFilledHit = false;
 	bool isMovedForward = false;
+	bool isInside = false;
 	double clampedDistance = 0.0;
 };
 

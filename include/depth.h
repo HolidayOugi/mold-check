@@ -112,6 +112,7 @@ static std::vector<CellData> makeDepthCells(
 	}
 	std::vector<CellData> surfaceCells = cells;
 	std::vector<CellData> depthCells = surfaceCells;
+	updateDepthCellInsideFlags(surfaceCells, depthCells, eps);
 
 	depthCells =
 		biharmonicFillWhiteCellsFromRedCells(
@@ -217,6 +218,7 @@ static std::vector<CellData> makeDepthCells(
 	}
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
+	updateDepthCellInsideFlags(surfaceCells, depthCells, eps);
 
 	return depthCells;
 }

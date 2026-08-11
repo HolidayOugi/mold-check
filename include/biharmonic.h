@@ -44,6 +44,32 @@ struct BiharmonicBounds
 	Eigen::VectorXd upper;
 };
 
+static void updateDepthCellInsideFlags(
+	const std::vector<CellData>& cells,
+	std::vector<CellData>& depthCells,
+	double eps)
+{
+	if (cells.size() != depthCells.size()) {
+		return;
+	}
+
+	const double tolerance = std::max(1e-10, 10.0 * std::abs(eps));
+	for (vcl::uint idx = 0; idx < depthCells.size(); ++idx) {
+		const CellData& surfaceCell = cells[idx];
+		CellData& depthCell = depthCells[idx];
+
+		depthCell.isInside = false;
+		if (!surfaceCell.hasHit ||
+			!std::isfinite(surfaceCell.distance) ||
+			!std::isfinite(depthCell.distance)) {
+			continue;
+		}
+
+		depthCell.isInside =
+			depthCell.distance >= surfaceCell.distance - tolerance;
+	}
+}
+
 static vcl::uint biharmonicNearestHitCellDistance(
 	const std::vector<CellData>& depthCells,
 	const GridChoice& grid,
@@ -275,6 +301,8 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 			0.003 * maxDistance :
 			std::max<double>(1e-6, 100.0 * eps);
 
+	updateDepthCellInsideFlags(cells, depthCells, eps);
+
 	for (uint idx = 0; idx < depthCells.size(); ++idx) {
 		if (!std::isfinite(depthCells[idx].distance)) {
 			continue;
@@ -350,6 +378,8 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 			static_cast<int>(selection.variableCellIds.size());
 		selection.variableCellIds.push_back(idx);
 	}
+
+	updateDepthCellInsideFlags(cells, depthCells, eps);
 
 	biharmonicCollectFixedAnchors(
 		depthCells,
@@ -758,6 +788,8 @@ static void biharmonicApplyWhiteSolution(
 				distance >= upperBound - activeTolerance;
 		}
 	}
+
+	updateDepthCellInsideFlags(cells, depthCells, eps);
 }
 
 static void biharmonicApplyHitSolution(
@@ -813,6 +845,8 @@ static void biharmonicApplyHitSolution(
 			cell.isBiharmonicFilledHit = true;
 		}
 	}
+
+	updateDepthCellInsideFlags(cells, depthCells, eps);
 }
 
 static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
@@ -827,6 +861,8 @@ static std::vector<CellData> biharmonicFillWhiteCellsFromRedCells(
 		depthCells.size() != grid.rows * grid.cols) {
 		return depthCells;
 	}
+
+	updateDepthCellInsideFlags(cells, depthCells, eps);
 
 	BiharmonicCellSelection selection =
 		biharmonicSelectWhiteFillCells(cells, depthCells, grid);
@@ -901,6 +937,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 		depthCells.size() != grid.rows * grid.cols) {
 		return depthCells;
 	}
+
+	updateDepthCellInsideFlags(cells, depthCells, eps);
 
 	const bool useBoxConstraints =
 		fixedWhiteAnchors != nullptr &&
