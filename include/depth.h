@@ -242,6 +242,7 @@ static std::vector<CellData> makeDepthCells(
 		grid,
 		direction,
 		eps,
+		0,
 		maxDistance);
 
 	if (debugStepIndex != nullptr) {
@@ -269,10 +270,10 @@ static std::vector<CellData> makeDepthCells(
 			*debugStepIndex);
 	}
 
-	// Only forward-capped white cells (cyan) remain fixed anchors.
-	std::vector<unsigned char> fixedBlueCells(depthCells.size(), false);
+	// Remember which white cells entered this pass as forward-capped cyan.
+	std::vector<unsigned char> cyanCells(depthCells.size(), false);
 	for (uint idx = 0; idx < surfaceCells.size(); ++idx) {
-		fixedBlueCells[idx] =
+		cyanCells[idx] =
 			biharmonicIsWhiteForwardCapCandidate(
 				surfaceCells,
 				depthCells,
@@ -286,8 +287,9 @@ static std::vector<CellData> makeDepthCells(
 		grid,
 		direction,
 		eps,
+		10,
 		maxDistance,
-		&fixedBlueCells);
+		&cyanCells);
 	
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 13

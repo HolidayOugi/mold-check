@@ -21,6 +21,7 @@ struct BiharmonicCellSelection
 	std::vector<unsigned char> fixedIdsMask;
 	std::vector<vcl::uint> variableCellIds;
 	std::vector<vcl::uint> fixedCellIds;
+	std::vector<double> originalDistanceWeights;
 };
 
 struct BiharmonicLinearSystem
@@ -279,7 +280,7 @@ static void biharmonicCollectFixedAnchors(
 	}
 }
 
-// Select orange/hit cells that may move in the hit pass.
+// Select orange/hit cells and the movable white/cyan collar.
 static BiharmonicCellSelection biharmonicSelectHitFillCells(
 	const std::vector<CellData>& cells,
 	std::vector<CellData>& depthCells,
@@ -287,7 +288,8 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 	const vcl::Point3d& direction,
 	double eps,
 	double maxDistance,
-	bool useBoxConstraints)
+	bool useBoxConstraints,
+	vcl::uint collarRadius)
 {
 	using namespace vcl;
 
@@ -295,6 +297,7 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 	BiharmonicCellSelection selection;
 	selection.variableIds.assign(depthCells.size(), -1);
 	selection.fixedIdsMask.assign(depthCells.size(), false);
+	selection.originalDistanceWeights.assign(depthCells.size(), 0.0);
 	selection.variableCellIds.reserve(depthCells.size());
 
 	// Small safety margin used when an orange point must stay inside the mesh.
@@ -311,6 +314,28 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 			continue;
 		}
 
+		const uint hitDistance =
+			depthCells[idx].hasHit ?
+				0 :
+				biharmonicNearestHitCellDistance(
+					depthCells,
+					grid,
+					idx,
+					collarRadius);
+		const bool isCollarCell =
+			useBoxConstraints &&
+			!depthCells[idx].hasHit &&
+			collarRadius > 0 &&
+			hitDistance <= collarRadius;
+
+		if (isCollarCell) {
+			const double normalizedDistance =
+				static_cast<double>(hitDistance) /
+				static_cast<double>(collarRadius + 1);
+			selection.originalDistanceWeights[idx] =
+				normalizedDistance * normalizedDistance *
+				(3.0 - 2.0 * normalizedDistance);
+		}
 
 		// Deep orange points that accidentally moved outside are fixed back inside.
 		const bool isFixedOutsideOrange =
@@ -348,10 +373,10 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 			constrainedCell.isBiharmonicFilledHit = true;
 		}
 
-		// Skip already-corrected orange points, clamped hits, and all white cells.
+		// In the second pass, both white and cyan collar cells join the solve.
 		if (isFixedOutsideOrange ||
 			depthCells[idx].hasClampedHit ||
-			!depthCells[idx].hasHit) {
+			(!depthCells[idx].hasHit && !isCollarCell)) {
 			continue;
 		}
 
@@ -364,11 +389,11 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 	// Some points may have been corrected, so refresh before collecting anchors.
 	updateDepthCellInsideFlags(cells, depthCells, eps);
 
-	// Add fixed cells around the solved region to stabilize the boundary.
+	// Add the fixed band outside the movable collar.
 	biharmonicCollectFixedAnchors(
 		depthCells,
 		grid,
-		0,
+		collarRadius,
 		selection);
 
 	return selection;
@@ -824,7 +849,8 @@ static BiharmonicBounds biharmonicBuildHitBounds(
 	const std::vector<vcl::uint>& variableCellIds,
 	const GridChoice& grid,
 	const vcl::Point3d& direction,
-	double maxDistance)
+	double maxDistance,
+	const std::vector<unsigned char>* cyanCells)
 {
 	BiharmonicBounds bounds =
 		biharmonicMakeEmptyBounds(variableCellIds.size());
@@ -856,6 +882,16 @@ static BiharmonicBounds biharmonicBuildHitBounds(
 						maxDistance,
 						whiteBoundaryDistances,
 						maxWhiteBoundaryDistance);
+			}
+
+			// Cyan cells may participate in the collar, but never increase
+			// their distance relative to the value entering this hit pass.
+			if (cyanCells != nullptr &&
+				cyanCells->size() == depthCells.size() &&
+				(*cyanCells)[cellIdx]) {
+				bounds.upper(variableIdx) = std::min(
+					bounds.upper(variableIdx),
+					depthCell.distance);
 			}
 		}
 		else {
@@ -983,6 +1019,7 @@ static void biharmonicApplyHitSolution(
 	const std::vector<CellData>& cells,
 	std::vector<CellData>& depthCells,
 	const std::vector<vcl::uint>& variableCellIds,
+	const std::vector<double>& originalDistanceWeights,
 	const GridChoice& grid,
 	const Eigen::VectorXd& solvedDistances,
 	const vcl::Point3d& direction,
@@ -1011,7 +1048,20 @@ static void biharmonicApplyHitSolution(
 		CellData& cell = depthCells[cellIdx];
 		const bool wasRedHit =
 			cell.hasHit && !cell.hasClampedHit;
+		const double originalDistance = cell.distance;
 		cell.distance = distance;
+
+		if (useBoxConstraints &&
+			!cell.hasHit &&
+			cellIdx < originalDistanceWeights.size()) {
+			const double originalWeight = std::clamp(
+				originalDistanceWeights[cellIdx],
+				0.0,
+				1.0);
+			cell.distance =
+				originalWeight * originalDistance +
+				(1.0 - originalWeight) * cell.distance;
+		}
 
 		cell.hitPoints = {cell.cellCenter + direction * cell.distance};
 
@@ -1128,8 +1178,9 @@ static std::vector<CellData> biharmonicFillHitCells(
 	const GridChoice& grid,
 	const vcl::Point3d& direction,
 	double eps,
+	vcl::uint collarRadius,
 	double maxDistance = std::numeric_limits<double>::infinity(),
-	const std::vector<unsigned char>* fixedWhiteAnchors = nullptr)
+	const std::vector<unsigned char>* cyanCells = nullptr)
 {
 	if (depthCells.size() != cells.size() ||
 		depthCells.size() != grid.rows * grid.cols) {
@@ -1139,11 +1190,13 @@ static std::vector<CellData> biharmonicFillHitCells(
 	// Recompute inside state because orange cells may now be outside or inside.
 	updateDepthCellInsideFlags(cells, depthCells, eps);
 
-	// The second hit pass uses hard bounds when cyan anchors are fixed.
+	// The second hit pass enables the collar and cyan one-sided bounds.
 	const bool useBoxConstraints =
-		fixedWhiteAnchors != nullptr &&
-		fixedWhiteAnchors->size() == depthCells.size() &&
+		cyanCells != nullptr &&
+		cyanCells->size() == depthCells.size() &&
 		std::isfinite(maxDistance);
+	const vcl::uint activeCollarRadius =
+		useBoxConstraints ? collarRadius : 0;
 
 	// Pick movable hit cells and fixed anchors.
 	BiharmonicCellSelection selection =
@@ -1154,7 +1207,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 			direction,
 			eps,
 			maxDistance,
-			useBoxConstraints);
+			useBoxConstraints,
+			activeCollarRadius);
 
 	if (selection.variableCellIds.empty() ||
 		selection.fixedCellIds.empty()) {
@@ -1196,7 +1250,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 				selection.variableCellIds,
 				grid,
 				direction,
-				maxDistance);
+				maxDistance,
+				cyanCells);
 		const Eigen::VectorXd initialDistances =
 			biharmonicInitialDistances(
 				depthCells,
@@ -1222,6 +1277,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 		cells,
 		depthCells,
 		selection.variableCellIds,
+		selection.originalDistanceWeights,
 		grid,
 		solveResult.distances,
 		direction,
