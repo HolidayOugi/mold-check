@@ -230,7 +230,6 @@ static std::vector<CellData> makeDepthCells(
 		grid,
 		direction,
 		eps,
-		3,
 		maxDistance);
 
 	if (debugStepIndex != nullptr) {
@@ -271,7 +270,6 @@ static std::vector<CellData> makeDepthCells(
 		grid,
 		direction,
 		eps,
-		3,
 		maxDistance,
 		&fixedBlueCells);
 	

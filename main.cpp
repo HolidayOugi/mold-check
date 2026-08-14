@@ -696,10 +696,10 @@ int main()
     std::vector<std::pair<double, int>> scoredDirections;
 
     // Temporarily test only direction 0 instead of all 100 directions.
-    // const std::vector<int> directionIndicesToTest = {0};
+    const std::vector<int> directionIndicesToTest = {0};
 
-    // for (const int directionIndex : directionIndicesToTest) {
-    for (uint directionIndex = 0; directionIndex < fibNormals.size(); ++directionIndex) {
+    for (const int directionIndex : directionIndicesToTest) {
+    //for (uint directionIndex = 0; directionIndex < fibNormals.size(); ++directionIndex) {
         const auto& direction = fibNormals[directionIndex];
 
         std::cout << "Processing direction: "
