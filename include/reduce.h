@@ -44,6 +44,9 @@ static void erodeHitMaskOnce(
 	});
 
 	parallelFor(allCells, [&](uint idx) {
+		if (cells[idx].hasHit && !nextHasHit[idx]) {
+			cells[idx].isReduced = true;
+		}
 		cells[idx].hasHit = nextHasHit[idx];
 	});
 }
@@ -72,6 +75,9 @@ static void dilateHitMaskOnce(
 	});
 
 	parallelFor(allCells, [&](uint idx) {
+		if (cells[idx].hasHit && !nextHasHit[idx]) {
+			cells[idx].isReduced = true;
+		}
 		cells[idx].hasHit = nextHasHit[idx];
 	});
 }
@@ -190,6 +196,7 @@ static std::vector<CellData> keepLargestHitComponent(
 	for (uint idx = 0; idx < result.size(); ++idx) {
 		if (result[idx].hasHit && !keep[idx]) {
 			result[idx].hasHit = false;
+			result[idx].isReduced = true;
 		}
 	}
 
@@ -431,8 +438,9 @@ static std::vector<CellData> applyLineCutAndKeepLargest(
 
 	std::vector<CellData> result = cells;
 	for (vcl::uint idx = 0; idx < result.size(); ++idx) {
-		if (!keepMask[idx]) {
+		if (!keepMask[idx] && result[idx].hasHit) {
 			result[idx].hasHit = false;
+			result[idx].isReduced = true;
 		}
 	}
 
@@ -691,8 +699,8 @@ static void removeDraftAngleBoundaryPoints(
 			if (removeCell[idx]) {
 				cells[idx].hasHit = false;
 				cells[idx].hasClampedHit = false;
+				cells[idx].isReduced = true;
 				cells[idx].distance = maxDistance;
-				cells[idx].hitPoints.clear();
 				removedAny.store(true, std::memory_order_relaxed);
 			}
 		});
@@ -803,9 +811,10 @@ static std::vector<CellData> reducePoints(
 
 	std::vector<CellData> reducedCells = cells;
 	parallelFor(allCells, [&](uint idx) {
-		if (!candidateCells[idx].hasHit) {
+		if (!candidateCells[idx].hasHit && reducedCells[idx].hasHit) {
 			reducedCells[idx].hasHit = false;
 			reducedCells[idx].hasClampedHit = false;
+			reducedCells[idx].isReduced = true;
 		}
 	});
 

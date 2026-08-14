@@ -625,11 +625,156 @@ static BiharmonicBounds biharmonicMakeEmptyBounds(size_t variableCount)
 	return bounds;
 }
 
+static constexpr double BiharmonicWhiteForwardMinFraction = 0.01;
+static constexpr double BiharmonicWhiteForwardMaxFraction = 0.10;
+
+static vcl::uint biharmonicInvalidBoundaryDistance()
+{
+	return std::numeric_limits<vcl::uint>::max();
+}
+
+static bool biharmonicIsWhiteForwardCapCandidate(
+	const std::vector<CellData>& cells,
+	const std::vector<CellData>& depthCells,
+	vcl::uint idx)
+{
+	return idx < cells.size() &&
+		idx < depthCells.size() &&
+		!cells[idx].hasHit &&
+		cells[idx].isReduced &&
+		!depthCells[idx].hasHit &&
+		std::isfinite(cells[idx].distance) &&
+		std::isfinite(depthCells[idx].distance);
+}
+
+static std::vector<vcl::uint> biharmonicWhiteBoundaryDistances(
+	const std::vector<CellData>& cells,
+	const std::vector<CellData>& depthCells,
+	const GridChoice& grid)
+{
+	using namespace vcl;
+
+	const uint invalidDistance = biharmonicInvalidBoundaryDistance();
+	std::vector<uint> distances(depthCells.size(), invalidDistance);
+	std::vector<uint> queue;
+	queue.reserve(depthCells.size());
+
+	const auto seedBoundaryWhites = [&](bool orangeOnly) {
+		for (uint idx = 0; idx < depthCells.size(); ++idx) {
+			if (distances[idx] != invalidDistance ||
+				!biharmonicIsWhiteForwardCapCandidate(cells, depthCells, idx)) {
+				continue;
+			}
+
+			bool touchesBoundaryHit = false;
+			forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
+				const bool isBoundaryHit =
+					neighborIdx < depthCells.size() &&
+					depthCells[neighborIdx].hasHit &&
+					(!orangeOnly || depthCells[neighborIdx].isBiharmonicFilledHit);
+				if (isBoundaryHit) {
+					touchesBoundaryHit = true;
+					return false;
+				}
+				return true;
+			});
+
+			if (touchesBoundaryHit) {
+				distances[idx] = 0;
+				queue.push_back(idx);
+			}
+		}
+	};
+
+	seedBoundaryWhites(true);
+	if (queue.empty()) {
+		seedBoundaryWhites(false);
+	}
+
+	for (size_t readIdx = 0; readIdx < queue.size(); ++readIdx) {
+		const uint idx = queue[readIdx];
+		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
+			if (distances[neighborIdx] == invalidDistance &&
+				biharmonicIsWhiteForwardCapCandidate(cells, depthCells, neighborIdx)) {
+				distances[neighborIdx] = distances[idx] + 1;
+				queue.push_back(neighborIdx);
+			}
+			return true;
+		});
+	}
+
+	return distances;
+}
+
+
+static vcl::uint biharmonicMaxWhiteBoundaryDistance(
+	const std::vector<vcl::uint>& distances,
+	const std::vector<vcl::uint>& cellIds)
+{
+	const vcl::uint invalidDistance = biharmonicInvalidBoundaryDistance();
+	vcl::uint maxDistance = 0;
+
+	for (vcl::uint cellIdx : cellIds) {
+		if (cellIdx < distances.size() &&
+			distances[cellIdx] != invalidDistance) {
+			maxDistance = std::max(maxDistance, distances[cellIdx]);
+		}
+	}
+
+	return maxDistance;
+}
+
+static vcl::uint biharmonicMaxWhiteBoundaryDistance(
+	const std::vector<vcl::uint>& distances)
+{
+	const vcl::uint invalidDistance = biharmonicInvalidBoundaryDistance();
+	vcl::uint maxDistance = 0;
+
+	for (vcl::uint distance : distances) {
+		if (distance != invalidDistance) {
+			maxDistance = std::max(maxDistance, distance);
+		}
+	}
+
+	return maxDistance;
+}
+
+static double biharmonicWhiteForwardCapDistance(
+	const std::vector<CellData>& cells,
+	vcl::uint cellIdx,
+	double maxDistance,
+	const std::vector<vcl::uint>& whiteBoundaryDistances,
+	vcl::uint maxWhiteBoundaryDistance)
+{
+	if (cellIdx >= cells.size() ||
+		!std::isfinite(cells[cellIdx].distance) ||
+		!std::isfinite(maxDistance)) {
+		return std::numeric_limits<double>::infinity();
+	}
+
+	double fraction = BiharmonicWhiteForwardMinFraction;
+	const vcl::uint invalidDistance = biharmonicInvalidBoundaryDistance();
+	if (cellIdx < whiteBoundaryDistances.size() &&
+		whiteBoundaryDistances[cellIdx] != invalidDistance &&
+		maxWhiteBoundaryDistance > 0) {
+		const double normalizedDistance = std::min(
+			1.0,
+			static_cast<double>(whiteBoundaryDistances[cellIdx]) /
+				static_cast<double>(maxWhiteBoundaryDistance));
+		fraction +=
+			(BiharmonicWhiteForwardMaxFraction -
+			 BiharmonicWhiteForwardMinFraction) *
+			normalizedDistance;
+	}
+
+	return cells[cellIdx].distance - fraction * maxDistance;
+}
 // Add optional white forward distance caps before choosing the solver.
 static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& depthCells,
 	const std::vector<vcl::uint>& variableCellIds,
+	const GridChoice& grid,
 	const BiharmonicLinearSystem& linearSystem,
 	double maxDistance)
 {
@@ -643,20 +788,29 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 		biharmonicMakeEmptyBounds(variableCount);
 	Eigen::VectorXd initialDistances(
 		static_cast<Eigen::Index>(variableCount));
+	const std::vector<vcl::uint> whiteBoundaryDistances =
+		biharmonicWhiteBoundaryDistances(cells, depthCells, grid);
+	const vcl::uint maxWhiteBoundaryDistance =
+		biharmonicMaxWhiteBoundaryDistance(whiteBoundaryDistances);
 
 	for (vcl::uint i = 0; i < variableCellIds.size(); ++i) {
 		const vcl::uint cellIdx = variableCellIds[i];
-		const double surfaceDistance = cells[cellIdx].distance;
+		const bool hasForwardCap =
+			biharmonicIsWhiteForwardCapCandidate(cells, depthCells, cellIdx);
 		const double upperBound =
-			std::isfinite(surfaceDistance) ?
-				surfaceDistance - 0.01 * maxDistance :
+			hasForwardCap ?
+				biharmonicWhiteForwardCapDistance(
+					cells,
+					cellIdx,
+					maxDistance,
+					whiteBoundaryDistances,
+					maxWhiteBoundaryDistance) :
 				std::numeric_limits<double>::infinity();
 		bounds.upper(static_cast<Eigen::Index>(i)) = upperBound;
 		initialDistances(static_cast<Eigen::Index>(i)) = std::min(
 			depthCells[cellIdx].distance,
 			upperBound);
 	}
-
 	return biharmonicSolveBoxConstrained(
 		linearSystem,
 		initialDistances,
@@ -674,6 +828,10 @@ static BiharmonicBounds biharmonicBuildHitBounds(
 {
 	BiharmonicBounds bounds =
 		biharmonicMakeEmptyBounds(variableCellIds.size());
+	const std::vector<vcl::uint> whiteBoundaryDistances =
+		biharmonicWhiteBoundaryDistances(cells, depthCells, grid);
+	const vcl::uint maxWhiteBoundaryDistance =
+		biharmonicMaxWhiteBoundaryDistance(whiteBoundaryDistances);
 
 	// Orange points that are clearly inside get this safety margin after the first hit.
 	const double depthConstraintMargin = 0.003 * maxDistance;
@@ -686,10 +844,18 @@ static BiharmonicBounds biharmonicBuildHitBounds(
 		const CellData& surfaceCell = cells[cellIdx];
 
 		if (!depthCell.hasHit) {
-			// Whites can only move forward up to this distance cap.
-			if (std::isfinite(surfaceCell.distance)) {
+			// This is only an upper bound: smaller distances are left free.
+			if (biharmonicIsWhiteForwardCapCandidate(
+					cells,
+					depthCells,
+					cellIdx)) {
 				bounds.upper(variableIdx) =
-					surfaceCell.distance - 0.01 * maxDistance;
+					biharmonicWhiteForwardCapDistance(
+						cells,
+						cellIdx,
+						maxDistance,
+						whiteBoundaryDistances,
+						maxWhiteBoundaryDistance);
 			}
 		}
 		else {
@@ -762,11 +928,21 @@ static void biharmonicApplyWhiteSolution(
 	const std::vector<CellData>& cells,
 	std::vector<CellData>& depthCells,
 	const std::vector<vcl::uint>& variableCellIds,
+	const GridChoice& grid,
 	const Eigen::VectorXd& solvedDistances,
 	const vcl::Point3d& direction,
 	double eps,
 	double maxDistance)
 {
+	const std::vector<vcl::uint> whiteBoundaryDistances =
+		std::isfinite(maxDistance) ?
+			biharmonicWhiteBoundaryDistances(cells, depthCells, grid) :
+			std::vector<vcl::uint>();
+	const vcl::uint maxWhiteBoundaryDistance =
+		std::isfinite(maxDistance) ?
+			biharmonicMaxWhiteBoundaryDistance(whiteBoundaryDistances) :
+			0;
+
 	for (vcl::uint i = 0; i < variableCellIds.size(); ++i) {
 		const vcl::uint cellIdx = variableCellIds[i];
 		const double distance =
@@ -781,9 +957,15 @@ static void biharmonicApplyWhiteSolution(
 		cell.hitPoints = {cell.cellCenter + direction * cell.distance};
 
 		if (std::isfinite(maxDistance) &&
-			std::isfinite(cells[cellIdx].distance)) {
+			std::isfinite(cells[cellIdx].distance) &&
+			biharmonicIsWhiteForwardCapCandidate(cells, depthCells, cellIdx)) {
 			const double upperBound =
-				cells[cellIdx].distance - 0.01 * maxDistance;
+				biharmonicWhiteForwardCapDistance(
+					cells,
+					cellIdx,
+					maxDistance,
+					whiteBoundaryDistances,
+					maxWhiteBoundaryDistance);
 			const double activeTolerance = std::max(
 				1e-10,
 				10.0 * static_cast<double>(eps) *
@@ -801,12 +983,22 @@ static void biharmonicApplyHitSolution(
 	const std::vector<CellData>& cells,
 	std::vector<CellData>& depthCells,
 	const std::vector<vcl::uint>& variableCellIds,
+	const GridChoice& grid,
 	const Eigen::VectorXd& solvedDistances,
 	const vcl::Point3d& direction,
 	double eps,
 	double maxDistance,
 	bool useBoxConstraints)
 {
+	const std::vector<vcl::uint> whiteBoundaryDistances =
+		useBoxConstraints ?
+			biharmonicWhiteBoundaryDistances(cells, depthCells, grid) :
+			std::vector<vcl::uint>();
+	const vcl::uint maxWhiteBoundaryDistance =
+		useBoxConstraints ?
+			biharmonicMaxWhiteBoundaryDistance(whiteBoundaryDistances) :
+			0;
+
 	for (vcl::uint i = 0; i < variableCellIds.size(); ++i) {
 		const vcl::uint cellIdx = variableCellIds[i];
 		const double distance =
@@ -825,9 +1017,15 @@ static void biharmonicApplyHitSolution(
 
 		if (useBoxConstraints &&
 			!cell.hasHit &&
-			std::isfinite(cells[cellIdx].distance)) {
+			std::isfinite(cells[cellIdx].distance) &&
+			biharmonicIsWhiteForwardCapCandidate(cells, depthCells, cellIdx)) {
 			const double upperBound =
-				cells[cellIdx].distance - 0.01 * maxDistance;
+				biharmonicWhiteForwardCapDistance(
+					cells,
+					cellIdx,
+					maxDistance,
+					whiteBoundaryDistances,
+					maxWhiteBoundaryDistance);
 			const double activeTolerance = std::max(
 				1e-10,
 				10.0 * static_cast<double>(eps) *
@@ -894,6 +1092,7 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 			cells,
 			depthCells,
 			selection.variableCellIds,
+			grid,
 			linearSystem,
 			maxDistance);
 
@@ -911,6 +1110,7 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 		cells,
 		depthCells,
 		selection.variableCellIds,
+		grid,
 		solveResult.distances,
 		direction,
 		eps,
@@ -1022,6 +1222,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 		cells,
 		depthCells,
 		selection.variableCellIds,
+		grid,
 		solveResult.distances,
 		direction,
 		eps,

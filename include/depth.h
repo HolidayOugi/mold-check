@@ -107,6 +107,11 @@ static std::vector<CellData> stabilizeCellBorders(
 	}
 
 	const std::vector<CellData> originalDepthCells = depthCells;
+	const std::vector<uint> whiteBoundaryDistances =
+		biharmonicWhiteBoundaryDistances(surfaceCells, originalDepthCells, grid);
+	const uint maxWhiteBoundaryDistance =
+		biharmonicMaxWhiteBoundaryDistance(whiteBoundaryDistances);
+
 	for (uint idx = 0; idx < depthCells.size(); ++idx) {
 		const uint row = idx / grid.cols;
 		const uint col = idx % grid.cols;
@@ -143,11 +148,18 @@ static std::vector<CellData> stabilizeCellBorders(
 		borderCell.clampedDistance = borderCell.distance;
 		borderCell.hasClampedHit = false;
 
-		if (!surfaceCells[idx].hasHit &&
-			std::isfinite(surfaceCells[idx].distance) &&
+		if (biharmonicIsWhiteForwardCapCandidate(
+				surfaceCells,
+				originalDepthCells,
+				idx) &&
 			std::isfinite(maxDistance)) {
 			const double forwardCap =
-				surfaceCells[idx].distance - 0.01 * maxDistance;
+				biharmonicWhiteForwardCapDistance(
+					surfaceCells,
+					idx,
+					maxDistance,
+					whiteBoundaryDistances,
+					maxWhiteBoundaryDistance);
 			const double activeTolerance = std::max(
 				1e-10,
 				10.0 * static_cast<double>(eps) *
@@ -261,7 +273,11 @@ static std::vector<CellData> makeDepthCells(
 	std::vector<unsigned char> fixedBlueCells(depthCells.size(), false);
 	for (uint idx = 0; idx < surfaceCells.size(); ++idx) {
 		fixedBlueCells[idx] =
-			!surfaceCells[idx].hasHit && depthCells[idx].isMovedForward;
+			biharmonicIsWhiteForwardCapCandidate(
+				surfaceCells,
+				depthCells,
+				idx) &&
+			depthCells[idx].isMovedForward;
 	}
 
 	depthCells = biharmonicFillHitCells(
