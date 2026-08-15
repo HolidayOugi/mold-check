@@ -239,9 +239,64 @@ MoldCheckMetrics moldCheck(
     std::vector<CellData> cells(allCells.size());
 
     parallelFor(allCells, [&](uint idx) {
-        const CellData cell = makeCellGeometry(idx, grid, planePoint, u, v);
+        cells[idx] = makeCellGeometry(idx, grid, planePoint, u, v);
+        cells[idx].distance = MAX_DISTANCE;
+        cells[idx].clampedDistance = MAX_DISTANCE;
+        cells[idx].boundaries = {0.0, MAX_DISTANCE};
+    });
+
+    if (moldMesh != nullptr) {
+        double moldMinProj = std::numeric_limits<double>::infinity();
+        for (const auto& vertex : moldMesh->vertices()) {
+            moldMinProj = std::min(
+                moldMinProj,
+                vertex.position().dot(direction));
+        }
+
+        const Point3d boundaryPlanePoint = direction * moldMinProj;
+        const double boundaryPlaneDistance = minProj - moldMinProj;
+        const embree::Scene moldScene(*moldMesh);
+        parallelFor(allCells, [&](uint idx) {
+            const CellData boundaryCell =
+                makeCellGeometry(
+                    idx,
+                    grid,
+                    boundaryPlanePoint,
+                    u,
+                    v);
+            cells[idx].boundaries = shootBoundaryRayOnCell(
+                boundaryCell,
+                moldScene,
+                direction,
+                boundaryPlaneDistance,
+                MAX_DISTANCE,
+                RAY_EPS);
+            cells[idx].isDiscarded =
+                cells[idx].boundaries[0] == -MAX_DISTANCE &&
+                cells[idx].boundaries[1] == MAX_DISTANCE;
+        });
+
+        restoreBoundaryCollarCells(
+            cells,
+            allCells,
+            grid,
+            MAX_DISTANCE,
+            1);
+
+    }
+
+    const size_t activeCellCount = std::count_if(
+        cells.begin(),
+        cells.end(),
+        [](const CellData& cell) { return !cell.isDiscarded; });
+
+    parallelFor(allCells, [&](uint idx) {
+        if (cells[idx].isDiscarded) {
+            return;
+        }
+
         cells[idx] = shootRayOnCell(
-            cell,
+            cells[idx],
             m,
             scene,
             planePoint,
@@ -273,12 +328,16 @@ MoldCheckMetrics moldCheck(
     if (debug) {
 
         std::cout << "Ray casting complete. Hit cells: "
-                  << rawHitCount << "/" << allCells.size() << "\n";
+                  << rawHitCount << "/" << activeCellCount << "\n";
         std::cout << "Beginning Clamping phase...\n";
         std::cout.flush();
     }
 
     parallelFor(allCells, [&](uint idx) {
+        if (cells[idx].isDiscarded) {
+            return;
+        }
+
         computeClampedCell(
             idx,
             cells,
@@ -351,8 +410,8 @@ MoldCheckMetrics moldCheck(
     const HitCellShapeData hitShape = hitCellShape(cells, grid);
 
     const double hitRatio =
-        (cells.size() > 0) ?
-            static_cast<double>(reducedHitCount) / cells.size() :
+        (activeCellCount > 0) ?
+            static_cast<double>(reducedHitCount) / activeCellCount :
             0.0;
 
     const MoldCheckMetrics metrics{
@@ -369,7 +428,7 @@ MoldCheckMetrics moldCheck(
 
     if (debug) {
         std::cout << "Clamping and reduction complete. Hit cells after reduction: "
-                  << reducedHitCount << "/" << allCells.size() << "\n";
+                  << reducedHitCount << "/" << activeCellCount << "\n";
         std::cout.flush();
     }
 
@@ -447,6 +506,10 @@ MoldCheckMetrics moldCheck(
         depthPointsMesh.enablePerVertexColor();
 
         for (uint i = 0; i < depthCells.size(); ++i) {
+            if (depthCells[i].isDiscarded) {
+                continue;
+            }
+
             const Point3d depthPoint =
                 depthCells[i].cellCenter +
                 direction * depthCells[i].distance;
@@ -696,10 +759,10 @@ int main()
     std::vector<std::pair<double, int>> scoredDirections;
 
     // Temporarily test only direction 0 instead of all 100 directions.
-    const std::vector<int> directionIndicesToTest = {0};
+    //const std::vector<int> directionIndicesToTest = {0};
 
-    for (const int directionIndex : directionIndicesToTest) {
-    //for (uint directionIndex = 0; directionIndex < fibNormals.size(); ++directionIndex) {
+    //for (const int directionIndex : directionIndicesToTest) {
+    for (uint directionIndex = 0; directionIndex < fibNormals.size(); ++directionIndex) {
         const auto& direction = fibNormals[directionIndex];
 
         std::cout << "Processing direction: "

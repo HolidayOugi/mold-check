@@ -5,6 +5,7 @@
 #include "struct.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <tuple>
@@ -216,6 +217,105 @@ static CellData shootRayOnCell(
 	result.clampedDistance = maxDistance;
 
 	return result;
+}
+
+static std::array<double, 2> shootBoundaryRayOnCell(
+	const CellData& cell,
+	const vcl::embree::Scene& scene,
+	const vcl::Point3d& direction,
+	double planeDistance,
+	double maxDistance,
+	float eps)
+{
+	using namespace vcl;
+
+	std::array<double, 2> boundaries = {-maxDistance, maxDistance};
+	const Point3d rayOrigin = cell.cellCenter + direction * (-eps);
+	const auto rayHits =
+		scene.facesIntersectedByRay(rayOrigin, direction, eps);
+	const double maximumRayDistance =
+		maxDistance + std::max(0.0, planeDistance);
+	std::vector<double> hitDistances;
+	hitDistances.reserve(rayHits.size());
+
+	for (const auto& rayHit : rayHits) {
+		const double hitDistance = std::get<3>(rayHit);
+		if (std::isfinite(hitDistance) &&
+			hitDistance >= 0.0 &&
+			hitDistance <= maximumRayDistance) {
+			hitDistances.push_back(hitDistance);
+		}
+	}
+
+	if (hitDistances.empty()) {
+		return boundaries;
+	}
+
+	std::sort(hitDistances.begin(), hitDistances.end());
+	const double hitTolerance =
+		std::max(1e-10, 10.0 * std::abs(eps));
+	hitDistances.erase(
+		std::unique(
+			hitDistances.begin(),
+			hitDistances.end(),
+			[&](double first, double second) {
+				return std::abs(first - second) <= hitTolerance;
+			}),
+		hitDistances.end());
+
+	boundaries[0] = hitDistances.front() - planeDistance;
+	if (hitDistances.size() > 1) {
+		boundaries[1] = hitDistances.back() - planeDistance;
+	}
+
+	return boundaries;
+}
+
+static void restoreBoundaryCollarCells(
+	std::vector<CellData>& cells,
+	const std::vector<vcl::uint>& cellIds,
+	const GridChoice& grid,
+	double maxDistance,
+	vcl::uint collarRadius)
+{
+	if (cells.size() != grid.rows * grid.cols || collarRadius == 0) {
+		return;
+	}
+
+	vcl::parallelFor(cellIds, [&](vcl::uint idx) {
+		if (idx >= cells.size() || !cells[idx].isDiscarded) {
+			return;
+		}
+
+		const vcl::uint row = idx / grid.cols;
+		const vcl::uint col = idx % grid.cols;
+		const int radius = static_cast<int>(collarRadius);
+		const int minRow = std::max<int>(0, static_cast<int>(row) - radius);
+		const int maxRow = std::min<int>(
+			static_cast<int>(grid.rows) - 1,
+			static_cast<int>(row) + radius);
+		const int minCol = std::max<int>(0, static_cast<int>(col) - radius);
+		const int maxCol = std::min<int>(
+			static_cast<int>(grid.cols) - 1,
+			static_cast<int>(col) + radius);
+
+		for (int neighborRow = minRow; neighborRow <= maxRow; ++neighborRow) {
+			for (int neighborCol = minCol;
+				 neighborCol <= maxCol;
+				 ++neighborCol) {
+				const vcl::uint neighborIdx =
+					static_cast<vcl::uint>(neighborRow) * grid.cols +
+					static_cast<vcl::uint>(neighborCol);
+				const bool hasBoundary =
+					cells[neighborIdx].boundaries[0] != -maxDistance ||
+					cells[neighborIdx].boundaries[1] != maxDistance;
+				if (hasBoundary) {
+					cells[idx].isDiscarded = false;
+					return;
+				}
+			}
+		}
+	});
 }
 
 static CellData makeCellGeometry(

@@ -37,7 +37,8 @@ static std::vector<CellData> fixDepthCellConeViolations(
 	std::iota(allCells.begin(), allCells.end(), 0);
 
 	parallelFor(allCells, [&](uint i) {
-		if (originalDepthCells[i].hitPoints.empty()) {
+		if (originalDepthCells[i].isDiscarded ||
+			originalDepthCells[i].hitPoints.empty()) {
 			return;
 		}
 
@@ -47,7 +48,9 @@ static std::vector<CellData> fixDepthCellConeViolations(
 		bool hasViolation = false;
 
 		for (uint j = 0; j < originalDepthCells.size(); ++j) {
-			if (i == j || originalDepthCells[j].hitPoints.empty()) {
+			if (i == j ||
+				originalDepthCells[j].isDiscarded ||
+				originalDepthCells[j].hitPoints.empty()) {
 				continue;
 			}
 
@@ -85,91 +88,6 @@ static std::vector<CellData> fixDepthCellConeViolations(
 		depthCells[i].hasClampedHit = true;
 	});
 
-	return depthCells;
-}
-
-static std::vector<CellData> stabilizeCellBorders(
-	const std::vector<CellData>& surfaceCells,
-	std::vector<CellData> depthCells,
-	const vcl::Point3d& direction,
-	const GridChoice& grid,
-	vcl::uint hitSearchRadius,
-	float eps,
-	double maxDistance)
-{
-	using namespace vcl;
-
-	if (surfaceCells.size() != depthCells.size() ||
-		depthCells.size() != grid.rows * grid.cols ||
-		grid.rows < 3 ||
-		grid.cols < 3) {
-		return depthCells;
-	}
-
-	const std::vector<CellData> originalDepthCells = depthCells;
-	const std::vector<uint> whiteBoundaryDistances =
-		biharmonicWhiteBoundaryDistances(surfaceCells, originalDepthCells, grid);
-	const uint maxWhiteBoundaryDistance =
-		biharmonicMaxWhiteBoundaryDistance(whiteBoundaryDistances);
-
-	for (uint idx = 0; idx < depthCells.size(); ++idx) {
-		const uint row = idx / grid.cols;
-		const uint col = idx % grid.cols;
-		const bool isBorder =
-			row == 0 ||
-			col == 0 ||
-			row + 1 == grid.rows ||
-			col + 1 == grid.cols;
-		if (!isBorder) {
-			continue;
-		}
-
-		const uint nearestHitDistance = biharmonicNearestHitCellDistance(
-			surfaceCells,
-			grid,
-			idx,
-			hitSearchRadius);
-		if (nearestHitDistance <= hitSearchRadius) {
-			continue;
-		}
-
-		const uint innerRow = std::clamp<uint>(row, 1, grid.rows - 2);
-		const uint innerCol = std::clamp<uint>(col, 1, grid.cols - 2);
-		const uint innerIdx = innerRow * grid.cols + innerCol;
-		const double stableDistance = originalDepthCells[innerIdx].distance;
-		if (!std::isfinite(stableDistance)) {
-			continue;
-		}
-
-		CellData& borderCell = depthCells[idx];
-		borderCell.distance = stableDistance;
-		borderCell.hitPoints = {
-			borderCell.cellCenter + direction * borderCell.distance};
-		borderCell.clampedDistance = borderCell.distance;
-		borderCell.hasClampedHit = false;
-
-		if (biharmonicIsWhiteForwardCapCandidate(
-				surfaceCells,
-				originalDepthCells,
-				idx) &&
-			std::isfinite(maxDistance)) {
-			const double forwardCap =
-				biharmonicWhiteForwardCapDistance(
-					surfaceCells,
-					idx,
-					maxDistance,
-					whiteBoundaryDistances,
-					maxWhiteBoundaryDistance);
-			const double activeTolerance = std::max(
-				1e-10,
-				10.0 * static_cast<double>(eps) *
-					std::max(1.0, std::abs(forwardCap)));
-			borderCell.isMovedForward =
-				borderCell.distance >= forwardCap - activeTolerance;
-		}
-	}
-
-	updateDepthCellInsideFlags(surfaceCells, depthCells, eps);
 	return depthCells;
 }
 
@@ -218,6 +136,10 @@ static std::vector<CellData> makeDepthCells(
 	PolyMesh depthPointsMesh;
 	depthPointsMesh.enablePerVertexColor();
 	for (uint i = 0; i < depthCells.size(); ++i) {
+		if (depthCells[i].isDiscarded) {
+			continue;
+		}
+
 		const Point3d depthPoint =
 			depthCells[i].cellCenter + direction * depthCells[i].distance;
 		addColoredPoint(
@@ -260,7 +182,8 @@ static std::vector<CellData> makeDepthCells(
 			grid,
 			direction,
 			eps,
-			maxDistance);
+			maxDistance,
+			coneCosThreshold);
 	
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 12
@@ -298,15 +221,6 @@ static std::vector<CellData> makeDepthCells(
 			debugResultsSubdir,
 			*debugStepIndex);
 	}
-
-	depthCells = stabilizeCellBorders(
-		surfaceCells,
-		depthCells,
-		direction,
-		grid,
-		10,
-		eps,
-		maxDistance);
 
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 14

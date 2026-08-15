@@ -28,6 +28,10 @@ static vcl::Color moldCheckCellDebugColor(const CellData& cell)
 		return vcl::Color::Green;
 	}
 
+	if (cell.isBounded) {
+		return vcl::Color(128, 0, 128);
+	}
+
 	if (!cell.hasHit) {
 		if (cell.isMovedForward) {
 			return vcl::Color::Cyan;
@@ -53,6 +57,10 @@ static vcl::PolyMesh makeMoldCheckStepMesh(
 	stepMesh.enablePerVertexColor();
 
 	for (const CellData& cell : cells) {
+		if (cell.isDiscarded) {
+			continue;
+		}
+
 		const double pointDistance =
 			cell.hasClampedHit ? cell.clampedDistance : cell.distance;
 
@@ -112,14 +120,18 @@ vcl::PolyMesh validateClampedCells(
 	violatingPointsMesh.enablePerVertexColor();
 
 	vcl::parallelFor(allCells, [&](uint i) {
-		if (i >= cells.size() || cells[i].hitPoints.empty()) {
+		if (i >= cells.size() ||
+			cells[i].isDiscarded ||
+			cells[i].hitPoints.empty()) {
 			return;
 		}
 
 		const Point3d& point = cells[i].hitPoints[0];
 
 		for (uint j = 0; j < cells.size(); ++j) {
-			if (i == j || cells[j].hitPoints.empty()) {
+			if (i == j ||
+				cells[j].isDiscarded ||
+				cells[j].hitPoints.empty()) {
 				continue;
 			}
 
@@ -195,11 +207,16 @@ static vcl::TriMesh createMoldSurface(
 		return tm;
 	}
 
-	std::vector<std::vector<uint>> vertexGrid(grid.rows, std::vector<uint>(grid.cols, 0));
+	std::vector<std::vector<uint>> vertexGrid(
+		grid.rows,
+		std::vector<uint>(grid.cols, UINT_NULL));
 
 	for (uint row = 0; row < grid.rows; row += 1) {
 		for (uint col = 0; col < grid.cols; col += 1) {
 			const uint point = row * grid.cols + col;
+			if (cells[point].isDiscarded) {
+				continue;
+			}
 
 			const Point3d p =
 				cells[point].hitPoints.empty() ?
@@ -219,6 +236,12 @@ static vcl::TriMesh createMoldSurface(
 			const uint c10 = c00 + 1;
 			const uint c01 = c00 + grid.cols;
 			const uint c11 = c01 + 1;
+			if (cells[c00].isDiscarded ||
+				cells[c10].isDiscarded ||
+				cells[c01].isDiscarded ||
+				cells[c11].isDiscarded) {
+				continue;
+			}
 
 
 			const std::array<const CellData*, 4> quadCells = {

@@ -62,6 +62,10 @@ static void dilateHitMaskOnce(
 	std::vector<char> nextHasHit(cells.size(), false);
 
 	parallelFor(allCells, [&](uint idx) {
+		if (cells[idx].isDiscarded) {
+			return;
+		}
+
 		bool add = cells[idx].hasHit;
 		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
 			if (cells[neighborIdx].hasHit) {
