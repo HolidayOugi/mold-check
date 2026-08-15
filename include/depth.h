@@ -182,8 +182,7 @@ static std::vector<CellData> makeDepthCells(
 			grid,
 			direction,
 			eps,
-			maxDistance,
-			coneCosThreshold);
+			maxDistance);
 	
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 12

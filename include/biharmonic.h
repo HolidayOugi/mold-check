@@ -419,6 +419,82 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 	return selection;
 }
 
+static void biharmonicAddSlopePenalty(
+	const std::vector<CellData>& depthCells,
+	const GridChoice& grid,
+	const std::vector<int>& variableIds,
+	const std::vector<unsigned char>& fixedIdsMask,
+	const std::vector<vcl::uint>& variableCellIds,
+	double slopeWeight,
+	BiharmonicLinearSystem& linearSystem)
+{
+	if (slopeWeight <= 0.0 || grid.sideU <= 0.0 || grid.sideV <= 0.0) {
+		return;
+	}
+
+	const Eigen::Index variableCount =
+		static_cast<Eigen::Index>(variableCellIds.size());
+	std::vector<Eigen::Triplet<double>> slopeTriplets;
+	slopeTriplets.reserve(variableCellIds.size() * 12);
+	Eigen::VectorXd slopeRhs = Eigen::VectorXd::Zero(variableCount);
+
+	for (vcl::uint cellIdx : variableCellIds) {
+		const int variableIdx = variableIds[cellIdx];
+		const vcl::uint row = cellIdx / grid.cols;
+		const vcl::uint col = cellIdx % grid.cols;
+
+		const auto addEdge = [&](vcl::uint neighborIdx, double metricWeight) {
+			const double edgeWeight = slopeWeight * metricWeight;
+			const int neighborVariableIdx = variableIds[neighborIdx];
+			if (neighborVariableIdx >= 0) {
+				if (variableIdx >= neighborVariableIdx) {
+					return;
+				}
+				slopeTriplets.emplace_back(variableIdx, variableIdx, edgeWeight);
+				slopeTriplets.emplace_back(
+					neighborVariableIdx,
+					neighborVariableIdx,
+					edgeWeight);
+				slopeTriplets.emplace_back(
+					variableIdx,
+					neighborVariableIdx,
+					-edgeWeight);
+				slopeTriplets.emplace_back(
+					neighborVariableIdx,
+					variableIdx,
+					-edgeWeight);
+				return;
+			}
+
+			if (fixedIdsMask[neighborIdx]) {
+				slopeTriplets.emplace_back(variableIdx, variableIdx, edgeWeight);
+				slopeRhs(variableIdx) +=
+					edgeWeight * depthCells[neighborIdx].distance;
+			}
+		};
+
+		const double horizontalWeight = grid.sideV / grid.sideU;
+		const double verticalWeight = grid.sideU / grid.sideV;
+		if (col > 0) {
+			addEdge(cellIdx - 1, horizontalWeight);
+		}
+		if (col + 1 < grid.cols) {
+			addEdge(cellIdx + 1, horizontalWeight);
+		}
+		if (row > 0) {
+			addEdge(cellIdx - grid.cols, verticalWeight);
+		}
+		if (row + 1 < grid.rows) {
+			addEdge(cellIdx + grid.cols, verticalWeight);
+		}
+	}
+
+	Eigen::SparseMatrix<double> slopeSystem(variableCount, variableCount);
+	slopeSystem.setFromTriplets(slopeTriplets.begin(), slopeTriplets.end());
+	linearSystem.system += slopeSystem;
+	linearSystem.rhs += slopeRhs;
+}
+
 // Build the shared biharmonic least-squares system from variables and anchors.
 static BiharmonicLinearSystem biharmonicBuildSystem(
 	const std::vector<CellData>& depthCells,
@@ -427,7 +503,8 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 	const std::vector<unsigned char>& fixedIdsMask,
 	const std::vector<vcl::uint>& variableCellIds,
 	const std::vector<vcl::uint>& fixedCellIds,
-	double eps)
+	double eps,
+	double slopeWeight)
 {
 	using namespace vcl;
 
@@ -515,6 +592,14 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 	BiharmonicLinearSystem linearSystem;
 	linearSystem.system = laplacian.transpose() * laplacian;
 	linearSystem.rhs = laplacian.transpose() * fixedRhs;
+	biharmonicAddSlopePenalty(
+		depthCells,
+		grid,
+		variableIds,
+		fixedIdsMask,
+		variableCellIds,
+		slopeWeight,
+		linearSystem);
 
 	const double regularization =
 		std::max(1e-12, eps * eps);
@@ -672,6 +757,7 @@ static BiharmonicBounds biharmonicMakeEmptyBounds(size_t variableCount)
 
 static constexpr double BiharmonicWhiteForwardMinFraction = 0.015;
 static constexpr double BiharmonicWhiteForwardMaxFraction = 0.10;
+static constexpr double BiharmonicSecondWhiteSlopeWeight = 1.0;
 
 static vcl::uint biharmonicInvalidBoundaryDistance()
 {
@@ -814,78 +900,13 @@ static double biharmonicWhiteForwardCapDistance(
 
 	return cells[cellIdx].distance - fraction * maxDistance;
 }
-static std::vector<double> biharmonicWhiteDraftUpperBounds(
-	const std::vector<CellData>& depthCells,
-	const std::vector<vcl::uint>& variableCellIds,
-	const vcl::Point3d& direction,
-	double coneCosThreshold,
-	double eps)
-{
-	const double infinity = std::numeric_limits<double>::infinity();
-	std::vector<double> upperBounds(depthCells.size(), infinity);
-
-	if (!std::isfinite(coneCosThreshold) ||
-		coneCosThreshold <= 0.0 ||
-		coneCosThreshold >= 1.0 ||
-		direction.norm() <= eps) {
-		return upperBounds;
-	}
-
-	vcl::Point3d normalizedDirection = direction;
-	normalizedDirection.normalize();
-	const double sinThreshold = std::sqrt(
-		std::max(0.0, 1.0 - coneCosThreshold * coneCosThreshold));
-	if (sinThreshold <= eps) {
-		return upperBounds;
-	}
-	const double cotThreshold = coneCosThreshold / sinThreshold;
-
-	vcl::parallelFor(variableCellIds, [&](vcl::uint cellIdx) {
-		if (cellIdx >= depthCells.size() ||
-			depthCells[cellIdx].isDiscarded ||
-			!std::isfinite(depthCells[cellIdx].distance)) {
-			return;
-		}
-
-		const vcl::Point3d& cellCenter = depthCells[cellIdx].cellCenter;
-		double upperBound = infinity;
-		for (vcl::uint otherIdx = 0; otherIdx < depthCells.size(); ++otherIdx) {
-			if (otherIdx == cellIdx ||
-				depthCells[otherIdx].isDiscarded ||
-				depthCells[otherIdx].hitPoints.empty() ||
-				!std::isfinite(depthCells[otherIdx].distance)) {
-				continue;
-			}
-
-			const vcl::Point3d& otherPoint =
-				depthCells[otherIdx].hitPoints[0];
-			const vcl::Point3d offset = otherPoint - cellCenter;
-			const double axialDistance = offset.dot(normalizedDirection);
-			const double planarDistanceSquared = std::max(
-				0.0,
-				offset.squaredNorm() - axialDistance * axialDistance);
-			const double candidateUpperBound =
-				axialDistance +
-				std::sqrt(planarDistanceSquared) * cotThreshold;
-			upperBound = std::min(upperBound, candidateUpperBound);
-		}
-
-		upperBounds[cellIdx] = upperBound;
-	});
-
-	return upperBounds;
-}
-
-// Add mold, draft and forward upper bounds in the second white pass.
+// Keep only the forward caps that prevent cyan cells from entering the mesh.
 static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& depthCells,
 	const std::vector<vcl::uint>& variableCellIds,
 	const GridChoice& grid,
 	const BiharmonicLinearSystem& linearSystem,
-	const vcl::Point3d& direction,
-	double coneCosThreshold,
-	double eps,
 	double maxDistance)
 {
 	const size_t variableCount = variableCellIds.size();
@@ -902,71 +923,32 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 		biharmonicWhiteBoundaryDistances(cells, depthCells, grid);
 	const vcl::uint maxWhiteBoundaryDistance =
 		biharmonicMaxWhiteBoundaryDistance(whiteBoundaryDistances);
-	const std::vector<double> draftUpperBounds =
-		biharmonicWhiteDraftUpperBounds(
-			depthCells,
-			variableCellIds,
-			direction,
-			coneCosThreshold,
-			eps);
-	const double boundaryMargin = 0.003 * maxDistance;
 
 	for (vcl::uint i = 0; i < variableCellIds.size(); ++i) {
 		const vcl::uint cellIdx = variableCellIds[i];
 		const Eigen::Index variableIdx =
 			static_cast<Eigen::Index>(i);
-		const CellData& depthCell = depthCells[cellIdx];
-		const double moldLowerBound =
-			depthCell.boundaries[0] + boundaryMargin;
-		const double moldUpperBound =
-			depthCell.boundaries[1] - boundaryMargin;
-		double lowerBound = -std::numeric_limits<double>::infinity();
-		double upperBound = std::numeric_limits<double>::infinity();
-		bool hasMoldBounds =
-			std::isfinite(depthCell.boundaries[0]) &&
-			std::isfinite(depthCell.boundaries[1]) &&
-			(depthCell.boundaries[0] != -maxDistance ||
-			 depthCell.boundaries[1] != maxDistance) &&
-			moldLowerBound <= moldUpperBound;
+		initialDistances(variableIdx) = depthCells[cellIdx].distance;
 
-		if (hasMoldBounds) {
-			lowerBound = moldLowerBound;
-			upperBound = moldUpperBound;
-		}
-
-		double nonMoldUpperBound = draftUpperBounds[cellIdx];
 		if (biharmonicIsWhiteForwardCapCandidate(
 				cells,
 				depthCells,
 				cellIdx)) {
-			const double forwardUpperBound =
+			bounds.upper(variableIdx) =
 				biharmonicWhiteForwardCapDistance(
 					cells,
 					cellIdx,
 					maxDistance,
 					whiteBoundaryDistances,
 					maxWhiteBoundaryDistance);
-			nonMoldUpperBound =
-				std::min(nonMoldUpperBound, forwardUpperBound);
 		}
-
-		if (hasMoldBounds && lowerBound > nonMoldUpperBound) {
-			lowerBound = -std::numeric_limits<double>::infinity();
-			upperBound = nonMoldUpperBound;
-		}
-		else {
-			upperBound = std::min(upperBound, nonMoldUpperBound);
-		}
-		bounds.lower(variableIdx) = lowerBound;
-		bounds.upper(variableIdx) = upperBound;
-		initialDistances(variableIdx) = depthCell.distance;
 	}
+
 	return biharmonicSolveBoxConstrained(
 		linearSystem,
 		initialDistances,
 		bounds);
 }
-
 // Build hard bounds that keep inside orange points safely inside the mesh.
 static BiharmonicBounds biharmonicBuildHitBounds(
 	const std::vector<CellData>& cells,
@@ -1115,54 +1097,6 @@ static void biharmonicApplyWhiteSolution(
 
 		CellData& cell = depthCells[cellIdx];
 		cell.isBounded = false;
-
-		if (std::isfinite(maxDistance)) {
-			const double boundaryMargin = 0.003 * maxDistance;
-			const double lowerBound =
-				cell.boundaries[0] + boundaryMargin;
-			const double upperBound =
-				cell.boundaries[1] - boundaryMargin;
-			bool hasMoldBounds =
-				std::isfinite(cell.boundaries[0]) &&
-				std::isfinite(cell.boundaries[1]) &&
-				(cell.boundaries[0] != -maxDistance ||
-				 cell.boundaries[1] != maxDistance) &&
-				lowerBound <= upperBound;
-			bool moldUpperBoundIsActive = hasMoldBounds;
-
-			if (hasMoldBounds &&
-				biharmonicIsWhiteForwardCapCandidate(
-					cells,
-					depthCells,
-					cellIdx)) {
-				const double forwardUpperBound =
-					biharmonicWhiteForwardCapDistance(
-						cells,
-						cellIdx,
-						maxDistance,
-						whiteBoundaryDistances,
-						maxWhiteBoundaryDistance);
-
-				if (lowerBound > forwardUpperBound) {
-					hasMoldBounds = false;
-					moldUpperBoundIsActive = false;
-				}
-				else {
-					moldUpperBoundIsActive =
-						upperBound <= forwardUpperBound;
-				}
-			}
-
-			const double activeTolerance = std::max(
-				1e-10,
-				10.0 * static_cast<double>(eps) *
-					std::max(1.0, std::abs(distance)));
-			cell.isBounded =
-				hasMoldBounds &&
-				(std::abs(distance - lowerBound) <= activeTolerance ||
-				 (moldUpperBoundIsActive &&
-				  std::abs(distance - upperBound) <= activeTolerance));
-		}
 		biharmonicSetCellDistance(cell, distance, direction);
 
 		if (std::isfinite(maxDistance) &&
@@ -1281,8 +1215,7 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 	const GridChoice& grid,
 	const vcl::Point3d& direction,
 	double eps,
-	double maxDistance = std::numeric_limits<double>::infinity(),
-	double coneCosThreshold = std::numeric_limits<double>::quiet_NaN())
+	double maxDistance = std::numeric_limits<double>::infinity())
 {
 	if (depthCells.size() != cells.size() ||
 		depthCells.size() != grid.rows * grid.cols) {
@@ -1316,7 +1249,10 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 			selection.fixedIdsMask,
 			selection.variableCellIds,
 			selection.fixedCellIds,
-			eps);
+			eps,
+			std::isfinite(maxDistance) ?
+				BiharmonicSecondWhiteSlopeWeight :
+				0.0);
 
 	std::cout << "  biharmonic sparse solve start\n";
 	std::cout.flush();
@@ -1328,9 +1264,6 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 			selection.variableCellIds,
 			grid,
 			linearSystem,
-			direction,
-			coneCosThreshold,
-			eps,
 			maxDistance);
 
 	if (!solveResult.success) {
@@ -1417,7 +1350,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 			selection.fixedIdsMask,
 			selection.variableCellIds,
 			selection.fixedCellIds,
-			eps);
+			eps,
+			0.0);
 
 	std::cout << "  biharmonic sparse solve start\n";
 	std::cout.flush();
