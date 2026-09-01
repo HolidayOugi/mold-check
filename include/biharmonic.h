@@ -171,7 +171,7 @@ static bool biharmonicIsAtLeastDistanceFromWhiteBoundary(
 	return true;
 }
 
-// Select white cells as unknowns and nearby red/original hits as anchors.
+// Select white cells as unknowns and original hits as fixed anchors.
 static BiharmonicCellSelection biharmonicSelectWhiteFillCells(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& depthCells,
@@ -191,11 +191,13 @@ static BiharmonicCellSelection biharmonicSelectWhiteFillCells(
 			continue;
 		}
 
+		// Use non-clamped original hits as fixed cells.
 		if (cells[idx].hasHit && !cells[idx].hasClampedHit) {
 			selection.fixedIdsMask[idx] = true;
 			continue;
 		}
 
+		// Map each white cell to one solver variable.
 		if (!cells[idx].hasHit) {
 			selection.variableIds[idx] =
 				static_cast<int>(selection.variableCellIds.size());
@@ -203,6 +205,7 @@ static BiharmonicCellSelection biharmonicSelectWhiteFillCells(
 		}
 	}
 
+	// Keep only fixed cells touching an unknown as explicit anchors.
 	for (uint idx = 0; idx < depthCells.size(); ++idx) {
 		if (!selection.fixedIdsMask[idx]) {
 			continue;
@@ -341,12 +344,16 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 					grid,
 					idx,
 					collarRadius);
+
+		// Select non-hit cells inside the collar when box bounds are active.
 		const bool isCollarCell =
 			useBoxConstraints &&
 			!depthCells[idx].hasHit &&
 			collarRadius > 0 &&
 			hitDistance <= collarRadius;
 
+		// Build a smooth blend weight: near-hit cells follow the solution,
+		// while cells near the outer collar keep more of their original depth.
 		if (isCollarCell) {
 			const double normalizedDistance =
 				static_cast<double>(hitDistance) /
@@ -419,6 +426,7 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 	return selection;
 }
 
+// Smooth neighboring depths while preserving fixed cells.
 static void biharmonicAddSlopePenalty(
 	const std::vector<CellData>& depthCells,
 	const GridChoice& grid,
@@ -428,10 +436,12 @@ static void biharmonicAddSlopePenalty(
 	double slopeWeight,
 	BiharmonicLinearSystem& linearSystem)
 {
+	// Skip smoothing when disabled or when the grid size is invalid.
 	if (slopeWeight <= 0.0 || grid.sideU <= 0.0 || grid.sideV <= 0.0) {
 		return;
 	}
 
+	// Accumulate sparse smoothing coefficients and fixed-depth contributions.
 	const Eigen::Index variableCount =
 		static_cast<Eigen::Index>(variableCellIds.size());
 	std::vector<Eigen::Triplet<double>> slopeTriplets;
@@ -443,18 +453,24 @@ static void biharmonicAddSlopePenalty(
 		const vcl::uint row = cellIdx / grid.cols;
 		const vcl::uint col = cellIdx % grid.cols;
 
+		// Connect the current cell to one of its grid neighbors.
 		const auto addEdge = [&](vcl::uint neighborIdx, double metricWeight) {
 			const double edgeWeight = slopeWeight * metricWeight;
 			const int neighborVariableIdx = variableIds[neighborIdx];
 			if (neighborVariableIdx >= 0) {
+				// Process each pair of movable cells only once.
 				if (variableIdx >= neighborVariableIdx) {
 					return;
 				}
+
+				// Give both cells equal smoothing strength.
 				slopeTriplets.emplace_back(variableIdx, variableIdx, edgeWeight);
 				slopeTriplets.emplace_back(
 					neighborVariableIdx,
 					neighborVariableIdx,
 					edgeWeight);
+
+				// Couple their solved depths so they tend to stay close.
 				slopeTriplets.emplace_back(
 					variableIdx,
 					neighborVariableIdx,
@@ -466,6 +482,7 @@ static void biharmonicAddSlopePenalty(
 				return;
 			}
 
+			// Pull a movable cell toward the known depth of a fixed neighbor.
 			if (fixedIdsMask[neighborIdx]) {
 				slopeTriplets.emplace_back(variableIdx, variableIdx, edgeWeight);
 				slopeRhs(variableIdx) +=
@@ -473,6 +490,7 @@ static void biharmonicAddSlopePenalty(
 			}
 		};
 
+		// Compensate for non-square cells in each grid direction.
 		const double horizontalWeight = grid.sideV / grid.sideU;
 		const double verticalWeight = grid.sideU / grid.sideV;
 		if (col > 0) {
@@ -491,6 +509,8 @@ static void biharmonicAddSlopePenalty(
 
 	Eigen::SparseMatrix<double> slopeSystem(variableCount, variableCount);
 	slopeSystem.setFromTriplets(slopeTriplets.begin(), slopeTriplets.end());
+
+	// Merge the smoothing contributions into the system solved later.
 	linearSystem.system += slopeSystem;
 	linearSystem.rhs += slopeRhs;
 }
@@ -508,6 +528,7 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 {
 	using namespace vcl;
 
+	// Build Laplacian rows for unknowns and boundary anchors.
 	std::vector<uint> laplacianRowCellIds = variableCellIds;
 	laplacianRowCellIds.insert(
 		laplacianRowCellIds.end(),
@@ -529,6 +550,7 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 		const uint cellCol = cellIdx % grid.cols;
 		uint usedNeighborCount = 0;
 
+		// Add unknown neighbors to the matrix and fixed ones to the RHS.
 		const auto addNeighbor = [&](uint neighborIdx) {
 			if (variableIds[neighborIdx] >= 0) {
 				laplacianTriplets.emplace_back(
@@ -560,6 +582,7 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 		}
 
 		if (usedNeighborCount == 0) {
+			// Keep isolated variables at their current distance.
 			if (variableIds[cellIdx] >= 0) {
 				laplacianTriplets.emplace_back(
 					static_cast<int>(rowIdx),
@@ -589,6 +612,7 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 		laplacianTriplets.begin(),
 		laplacianTriplets.end());
 
+	// Form the normal equations for the Laplacian least-squares problem.
 	BiharmonicLinearSystem linearSystem;
 	linearSystem.system = laplacian.transpose() * laplacian;
 	linearSystem.rhs = laplacian.transpose() * fixedRhs;
@@ -601,6 +625,7 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 		slopeWeight,
 		linearSystem);
 
+	// Regularize the system around the current distances.
 	const double regularization =
 		std::max(1e-12, eps * eps);
 	for (uint i = 0; i < variableCellIds.size(); ++i) {
@@ -1086,6 +1111,7 @@ static void biharmonicApplyWhiteSolution(
 			biharmonicMaxWhiteBoundaryDistance(whiteBoundaryDistances) :
 			0;
 
+	//set distance to each cell
 	for (vcl::uint i = 0; i < variableCellIds.size(); ++i) {
 		const vcl::uint cellIdx = variableCellIds[i];
 		const double distance =
@@ -1098,7 +1124,8 @@ static void biharmonicApplyWhiteSolution(
 		CellData& cell = depthCells[cellIdx];
 		cell.isBounded = false;
 		biharmonicSetCellDistance(cell, distance, direction);
-
+		
+		// Mark forward-capped white cells as cyan for the next pass.
 		if (std::isfinite(maxDistance) &&
 			std::isfinite(cells[cellIdx].distance) &&
 			biharmonicIsWhiteForwardCapCandidate(cells, depthCells, cellIdx)) {
@@ -1135,6 +1162,7 @@ static void biharmonicApplyHitSolution(
 	double maxDistance,
 	bool useBoxConstraints)
 {
+	// Precompute how far each cell lies from the white boundary.
 	const std::vector<vcl::uint> whiteBoundaryDistances =
 		useBoxConstraints ?
 			biharmonicWhiteBoundaryDistances(cells, depthCells, grid) :
@@ -1144,6 +1172,7 @@ static void biharmonicApplyHitSolution(
 			biharmonicMaxWhiteBoundaryDistance(whiteBoundaryDistances) :
 			0;
 
+	// Write each valid solver result back to its grid cell.
 	for (vcl::uint i = 0; i < variableCellIds.size(); ++i) {
 		const vcl::uint cellIdx = variableCellIds[i];
 		const double distance =
@@ -1153,6 +1182,7 @@ static void biharmonicApplyHitSolution(
 			continue;
 		}
 
+		// Remember the incoming state before replacing the cell depth.
 		CellData& cell = depthCells[cellIdx];
 		const bool wasCyan =
 			cyanCells != nullptr &&
@@ -1163,6 +1193,7 @@ static void biharmonicApplyHitSolution(
 		const double originalDistance = cell.distance;
 		biharmonicSetCellDistance(cell, distance, direction);
 
+		// Reduce motion toward the outer edge of the movable white collar.
 		if (useBoxConstraints &&
 			!cell.hasHit &&
 			cellIdx < originalDistanceWeights.size()) {
@@ -1177,7 +1208,7 @@ static void biharmonicApplyHitSolution(
 				direction);
 		}
 
-
+		// Preserve existing cyan cells and mark cells still touching their cap.
 		if (useBoxConstraints &&
 			!cell.hasHit &&
 			std::isfinite(cells[cellIdx].distance) &&
@@ -1201,11 +1232,13 @@ static void biharmonicApplyHitSolution(
 			cell.isMovedForward = true;
 		}
 
+		// Mark original red hits updated by this pass.
 		if (wasRedHit) {
 			cell.isBiharmonicFilledHit = true;
 		}
 	}
 
+	// Refresh inside/outside flags after all depths have changed.
 	updateDepthCellInsideFlags(cells, depthCells, eps);
 }
 

@@ -221,6 +221,9 @@ static std::vector<CellData> makeDepthCells(
 			*debugStepIndex);
 	}
 
+	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
+	updateDepthCellInsideFlags(surfaceCells, depthCells, eps);
+
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 14
 			depthCells,
@@ -229,8 +232,6 @@ static std::vector<CellData> makeDepthCells(
 			*debugStepIndex);
 	}
 
-	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
-	updateDepthCellInsideFlags(surfaceCells, depthCells, eps);
 
 	return depthCells;
 }
