@@ -682,10 +682,6 @@ static BiharmonicBounds biharmonicMakeEmptyBounds(size_t variableCount)
 	return bounds;
 }
 
-// Tunable height offset parameters, expressed as fractions of maxDistance.
-static constexpr double BiharmonicWhiteHeightMaxFraction = 0.15;
-static constexpr double BiharmonicWhiteHeightGrowthPerCellFraction = 0.005;
-
 static vcl::uint biharmonicInvalidBoundaryDistance()
 {
 	return std::numeric_limits<vcl::uint>::max();
@@ -786,6 +782,11 @@ static double biharmonicWhiteForwardCapDistance(
 		return std::numeric_limits<double>::infinity();
 	}
 
+	// Tunable height offset parameters, expressed as fractions of maxDistance.
+	const double BiharmonicWhiteHeightMaxFraction = 0.15;
+	const double BiharmonicWhiteHeightGrowthPerCellFraction = 0.005;
+	const double BiHarmonicWhiteHeightOffset = 0.01;
+
 	const vcl::uint invalidDistance = biharmonicInvalidBoundaryDistance();
 	const vcl::uint boundaryDistance = whiteBoundaryDistances[cellIdx];
 	if (boundaryDistance == invalidDistance) {
@@ -796,9 +797,10 @@ static double biharmonicWhiteForwardCapDistance(
 		BiharmonicWhiteHeightMaxFraction * maxDistance;
 	const double heightGrowthPerCell =
 		BiharmonicWhiteHeightGrowthPerCellFraction * maxDistance;
+	const double heightOffset = BiHarmonicWhiteHeightOffset * maxDistance;
 	const double height = std::min(
 		maximumHeight,
-		static_cast<double>(boundaryDistance) * heightGrowthPerCell);
+		(heightOffset + static_cast<double>(boundaryDistance) * heightGrowthPerCell));
 	return cells[cellIdx].distance - height;
 }
 // Constrain white cells using the distance-dependent height offset.
