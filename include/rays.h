@@ -397,7 +397,8 @@ static void computeClampedCell(
 		}
 
 		anyCone = true;
-
+		
+		/*
 		const double t = coneBoundaryStep(
 			original,
 			cells[j].hitPoints[0],
@@ -406,6 +407,7 @@ static void computeClampedCell(
 			eps);
 
 		requiredT = std::max(requiredT, t);
+		*/
 	}
 
 	if (!anyCone) {
