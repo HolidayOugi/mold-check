@@ -725,7 +725,11 @@ int main()
 
     const auto startTime = std::chrono::steady_clock::now();
 
-    std::filesystem::create_directories(RESULTS_PATH);
+    const std::filesystem::path resultsPath = RESULTS_PATH;
+    std::filesystem::create_directories(resultsPath);
+    for (const auto& entry : std::filesystem::directory_iterator(resultsPath)) {
+        std::filesystem::remove_all(entry.path());
+    }
 
     //bigger than boxMesh for it to completely encapsulate the mold mesh
 	const double marginFactor = 0.2;
@@ -759,10 +763,10 @@ int main()
     std::vector<std::pair<double, int>> scoredDirections;
 
     // Temporarily test only direction 0 instead of all 100 directions.
-    //const std::vector<int> directionIndicesToTest = {0};
+    const std::vector<int> directionIndicesToTest = {0};
 
-    //for (const int directionIndex : directionIndicesToTest) {
-    for (uint directionIndex = 0; directionIndex < fibNormals.size(); ++directionIndex) {
+    for (const int directionIndex : directionIndicesToTest) {
+    //for (uint directionIndex = 0; directionIndex < fibNormals.size(); ++directionIndex) {
         const auto& direction = fibNormals[directionIndex];
 
         std::cout << "Processing direction: "

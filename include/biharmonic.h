@@ -426,95 +426,6 @@ static BiharmonicCellSelection biharmonicSelectHitFillCells(
 	return selection;
 }
 
-// Smooth neighboring depths while preserving fixed cells.
-static void biharmonicAddSlopePenalty(
-	const std::vector<CellData>& depthCells,
-	const GridChoice& grid,
-	const std::vector<int>& variableIds,
-	const std::vector<unsigned char>& fixedIdsMask,
-	const std::vector<vcl::uint>& variableCellIds,
-	double slopeWeight,
-	BiharmonicLinearSystem& linearSystem)
-{
-	// Skip smoothing when disabled or when the grid size is invalid.
-	if (slopeWeight <= 0.0 || grid.sideU <= 0.0 || grid.sideV <= 0.0) {
-		return;
-	}
-
-	// Accumulate sparse smoothing coefficients and fixed-depth contributions.
-	const Eigen::Index variableCount =
-		static_cast<Eigen::Index>(variableCellIds.size());
-	std::vector<Eigen::Triplet<double>> slopeTriplets;
-	slopeTriplets.reserve(variableCellIds.size() * 12);
-	Eigen::VectorXd slopeRhs = Eigen::VectorXd::Zero(variableCount);
-
-	for (vcl::uint cellIdx : variableCellIds) {
-		const int variableIdx = variableIds[cellIdx];
-		const vcl::uint row = cellIdx / grid.cols;
-		const vcl::uint col = cellIdx % grid.cols;
-
-		// Connect the current cell to one of its grid neighbors.
-		const auto addEdge = [&](vcl::uint neighborIdx, double metricWeight) {
-			const double edgeWeight = slopeWeight * metricWeight;
-			const int neighborVariableIdx = variableIds[neighborIdx];
-			if (neighborVariableIdx >= 0) {
-				// Process each pair of movable cells only once.
-				if (variableIdx >= neighborVariableIdx) {
-					return;
-				}
-
-				// Give both cells equal smoothing strength.
-				slopeTriplets.emplace_back(variableIdx, variableIdx, edgeWeight);
-				slopeTriplets.emplace_back(
-					neighborVariableIdx,
-					neighborVariableIdx,
-					edgeWeight);
-
-				// Couple their solved depths so they tend to stay close.
-				slopeTriplets.emplace_back(
-					variableIdx,
-					neighborVariableIdx,
-					-edgeWeight);
-				slopeTriplets.emplace_back(
-					neighborVariableIdx,
-					variableIdx,
-					-edgeWeight);
-				return;
-			}
-
-			// Pull a movable cell toward the known depth of a fixed neighbor.
-			if (fixedIdsMask[neighborIdx]) {
-				slopeTriplets.emplace_back(variableIdx, variableIdx, edgeWeight);
-				slopeRhs(variableIdx) +=
-					edgeWeight * depthCells[neighborIdx].distance;
-			}
-		};
-
-		// Compensate for non-square cells in each grid direction.
-		const double horizontalWeight = grid.sideV / grid.sideU;
-		const double verticalWeight = grid.sideU / grid.sideV;
-		if (col > 0) {
-			addEdge(cellIdx - 1, horizontalWeight);
-		}
-		if (col + 1 < grid.cols) {
-			addEdge(cellIdx + 1, horizontalWeight);
-		}
-		if (row > 0) {
-			addEdge(cellIdx - grid.cols, verticalWeight);
-		}
-		if (row + 1 < grid.rows) {
-			addEdge(cellIdx + grid.cols, verticalWeight);
-		}
-	}
-
-	Eigen::SparseMatrix<double> slopeSystem(variableCount, variableCount);
-	slopeSystem.setFromTriplets(slopeTriplets.begin(), slopeTriplets.end());
-
-	// Merge the smoothing contributions into the system solved later.
-	linearSystem.system += slopeSystem;
-	linearSystem.rhs += slopeRhs;
-}
-
 // Build the shared biharmonic least-squares system from variables and anchors.
 static BiharmonicLinearSystem biharmonicBuildSystem(
 	const std::vector<CellData>& depthCells,
@@ -523,8 +434,7 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 	const std::vector<unsigned char>& fixedIdsMask,
 	const std::vector<vcl::uint>& variableCellIds,
 	const std::vector<vcl::uint>& fixedCellIds,
-	double eps,
-	double slopeWeight)
+	double eps)
 {
 	using namespace vcl;
 
@@ -616,14 +526,6 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 	BiharmonicLinearSystem linearSystem;
 	linearSystem.system = laplacian.transpose() * laplacian;
 	linearSystem.rhs = laplacian.transpose() * fixedRhs;
-	biharmonicAddSlopePenalty(
-		depthCells,
-		grid,
-		variableIds,
-		fixedIdsMask,
-		variableCellIds,
-		slopeWeight,
-		linearSystem);
 
 	// Regularize the system around the current distances.
 	const double regularization =
@@ -782,7 +684,6 @@ static BiharmonicBounds biharmonicMakeEmptyBounds(size_t variableCount)
 
 static constexpr double BiharmonicWhiteForwardMinFraction = 0.015;
 static constexpr double BiharmonicWhiteForwardMaxFraction = 0.10;
-static constexpr double BiharmonicSecondWhiteSlopeWeight = 1.0;
 
 static vcl::uint biharmonicInvalidBoundaryDistance()
 {
@@ -1282,10 +1183,7 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 			selection.fixedIdsMask,
 			selection.variableCellIds,
 			selection.fixedCellIds,
-			eps,
-			std::isfinite(maxDistance) ?
-				BiharmonicSecondWhiteSlopeWeight :
-				0.0);
+			eps);
 
 	std::cout << "  biharmonic sparse solve start\n";
 	std::cout.flush();
@@ -1383,8 +1281,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 			selection.fixedIdsMask,
 			selection.variableCellIds,
 			selection.fixedCellIds,
-			eps,
-			0.0);
+			eps);
 
 	std::cout << "  biharmonic sparse solve start\n";
 	std::cout.flush();
