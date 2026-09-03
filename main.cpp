@@ -30,6 +30,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -726,9 +727,15 @@ int main()
     const auto startTime = std::chrono::steady_clock::now();
 
     const std::filesystem::path resultsPath = RESULTS_PATH;
-    std::filesystem::create_directories(resultsPath);
-    for (const auto& entry : std::filesystem::directory_iterator(resultsPath)) {
-        std::filesystem::remove_all(entry.path());
+    try {
+        std::filesystem::create_directories(resultsPath);
+        for (const auto& entry : std::filesystem::directory_iterator(resultsPath)) {
+            std::filesystem::remove_all(entry.path());
+        }
+    }
+    catch (const std::filesystem::filesystem_error& error) {
+        std::cerr << "Error: unable to clear output directory '"
+                  << resultsPath.string() << "': " << error.what() << "\n";
     }
 
     //bigger than boxMesh for it to completely encapsulate the mold mesh
