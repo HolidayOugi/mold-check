@@ -654,10 +654,10 @@ static void removeDraftAngleBoundaryPoints(
 			comparisonPoints.push_back(
 				{
 					otherIdx,
-					other.hasClampedHit ?
-						other.cellCenter +
-							normalizedDirection * other.clampedDistance :
-						other.hitPoints[0]
+					// other.hasClampedHit ?
+					// 	other.cellCenter +
+					// 		normalizedDirection * other.clampedDistance :
+					other.hitPoints[0]
 				});
 		}
 

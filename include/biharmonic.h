@@ -989,7 +989,6 @@ static void biharmonicApplyWhiteSolution(
 		}
 
 		CellData& cell = depthCells[cellIdx];
-		cell.isBounded = false;
 		biharmonicSetCellDistance(cell, distance, direction);
 		
 		// Mark cells touching their distance-minus-height cap as cyan.

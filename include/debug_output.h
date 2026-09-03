@@ -28,10 +28,6 @@ static vcl::Color moldCheckCellDebugColor(const CellData& cell)
 		return vcl::Color::Green;
 	}
 
-	if (cell.isBounded) {
-		return vcl::Color(128, 0, 128);
-	}
-
 	if (!cell.hasHit) {
 		if (cell.isMovedForward) {
 			return vcl::Color::Cyan;
@@ -61,8 +57,9 @@ static vcl::PolyMesh makeMoldCheckStepMesh(
 			continue;
 		}
 
-		const double pointDistance =
-			cell.hasClampedHit ? cell.clampedDistance : cell.distance;
+		// const double pointDistance =
+		// 	cell.hasClampedHit ? cell.clampedDistance : cell.distance;
+		const double pointDistance = cell.distance;
 
 		addColoredPoint(
 			stepMesh,

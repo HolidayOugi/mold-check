@@ -24,18 +24,17 @@ struct CellData
 {
 	std::array<vcl::Point3d, 4> cellCorners;
 	vcl::Point3d cellCenter;
-	double distance = 0.0;
-	std::array<double, 2> boundaries = {0.0, 0.0};
-	std::vector<vcl::Point3d> hitPoints;
-	bool hasHit = false;
-	bool hasClampedHit = false;
-	bool isReduced = false;
-	bool isBiharmonicFilledHit = false;
-	bool isMovedForward = false;
-	bool isBounded = false;
-	bool isDiscarded = false;
-	bool isInside = false;
-	double clampedDistance = 0.0;
+	double distance = 0.0; //distance from plane
+	std::array<double, 2> boundaries = {0.0, 0.0}; // min and max distance from mold plane
+	std::vector<vcl::Point3d> hitPoints; //all mesh hitpoints on the cell, if any
+	bool hasHit = false; // true if the cell has at least one hit point
+	bool hasClampedHit = false; // true if cell does not respect draft angle with hit point
+	bool isReduced = false; // true if is removed from ReducePoints
+	bool isBiharmonicFilledHit = false; // true if the cell is filled by biharmonic interpolation
+	bool isMovedForward = false; // cyan points
+	bool isDiscarded = false; // points outside box constraints
+	bool isInside = false; // inside the mesh, used for biharmonic interpolation
+	// double clampedDistance = 0.0;
 };
 
 struct HitCellShapeData

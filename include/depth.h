@@ -84,7 +84,7 @@ static std::vector<CellData> fixDepthCellConeViolations(
 		depthCells[i].hitPoints[0] = fixedPoint;
 		depthCells[i].distance =
 			(fixedPoint - depthCells[i].cellCenter).dot(direction);
-		depthCells[i].clampedDistance = depthCells[i].distance;
+		// depthCells[i].clampedDistance = depthCells[i].distance;
 		depthCells[i].hasClampedHit = true;
 	});
 

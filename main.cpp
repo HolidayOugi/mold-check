@@ -242,7 +242,7 @@ MoldCheckMetrics moldCheck(
     parallelFor(allCells, [&](uint idx) {
         cells[idx] = makeCellGeometry(idx, grid, planePoint, u, v);
         cells[idx].distance = MAX_DISTANCE;
-        cells[idx].clampedDistance = MAX_DISTANCE;
+		// cells[idx].clampedDistance = MAX_DISTANCE;
         cells[idx].boundaries = {0.0, MAX_DISTANCE};
     });
 
@@ -371,6 +371,18 @@ MoldCheckMetrics moldCheck(
         debugResultsSubdir,
         &debugStepIndex);
 
+    if (hasEnclosedWhiteHole(
+            cells,
+            grid,
+            direction,
+            debug,
+            debugResultsSubdir)) {
+        std::cout << "Direction discarded: the reduced cell grid contains "
+                     "an enclosed hole of white cells.\n";
+        std::cout.flush();
+        return {};
+    }
+
     double totalAreaHit = 0.0;
     double clampedAreaHit = 0.0;
     double hiddenAreaHit = 0.0;
@@ -382,9 +394,10 @@ MoldCheckMetrics moldCheck(
             totalAreaHit += cellArea;
         }
 
-        if (cells[i].hasHit &&
-            cells[i].hasClampedHit &&
-            std::abs(cells[i].clampedDistance - cells[i].distance) > EPS) {
+		// if (cells[i].hasHit &&
+		// 	cells[i].hasClampedHit &&
+		// 	std::abs(cells[i].clampedDistance - cells[i].distance) > EPS) {
+		if (cells[i].hasHit && cells[i].hasClampedHit) {
             clampedAreaHit += cellArea;
         }
 
@@ -499,7 +512,8 @@ MoldCheckMetrics moldCheck(
 
             addColoredPoint(
                 clampedPointsMesh,
-                cells[i].cellCenter + direction * cells[i].clampedDistance,
+				// cells[i].cellCenter + direction * cells[i].clampedDistance,
+				cells[i].cellCenter + direction * cells[i].distance,
                 Color::Blue);
         }
 
@@ -770,10 +784,10 @@ int main()
     std::vector<std::pair<double, int>> scoredDirections;
 
     // Temporarily test only direction 0 instead of all 100 directions.
-    const std::vector<int> directionIndicesToTest = {0};
+    //const std::vector<int> directionIndicesToTest = {0};
 
-    for (const int directionIndex : directionIndicesToTest) {
-    //for (uint directionIndex = 0; directionIndex < fibNormals.size(); ++directionIndex) {
+    //for (const int directionIndex : directionIndicesToTest) {
+    for (uint directionIndex = 0; directionIndex < fibNormals.size(); ++directionIndex) {
         const auto& direction = fibNormals[directionIndex];
 
         std::cout << "Processing direction: "
@@ -788,6 +802,10 @@ int main()
                 coneAngleDegrees,
                 draftAngleDegrees,
                 marginFactor);
+
+        if (!std::isfinite(result.score)) {
+            continue;
+        }
 
         scoredDirections.push_back(
             {result.score, directionIndex});

@@ -5,12 +5,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <numeric>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
 #include <vclib/base/parallel.h>
+#include <vclib/io.h>
 #include <vclib/meshes.h>
 
 static bool isWithinPlaneAngle(
@@ -271,6 +274,84 @@ static bool forEachSquareNeighbor(
 				return false;
 			}
 		}
+	}
+
+	return true;
+}
+
+// Return true when a four-connected region of white cells is fully enclosed
+// inside the grid instead of being connected to its outer boundary.
+static bool hasEnclosedWhiteHole(
+	const std::vector<CellData>& cells,
+	const GridChoice& grid,
+	const vcl::Point3d& direction,
+	bool debug,
+	const std::string& debugResultsSubdir)
+{
+	using namespace vcl;
+
+	if (grid.rows == 0 || grid.cols == 0 ||
+		cells.size() != static_cast<size_t>(grid.rows) * grid.cols) {
+		return false;
+	}
+
+	std::vector<unsigned char> exteriorWhite(cells.size(), false);
+	std::vector<uint> queue;
+	queue.reserve(cells.size());
+
+	const auto addExteriorWhite = [&](uint idx) {
+		if (!cells[idx].hasHit && !exteriorWhite[idx]) {
+			exteriorWhite[idx] = true;
+			queue.push_back(idx);
+		}
+	};
+
+	//set perimeter white cells as exterior
+	for (uint col = 0; col < grid.cols; ++col) {
+		addExteriorWhite(col);
+		addExteriorWhite((grid.rows - 1) * grid.cols + col);
+	}
+	for (uint row = 0; row < grid.rows; ++row) {
+		addExteriorWhite(row * grid.cols);
+		addExteriorWhite(row * grid.cols + grid.cols - 1);
+	}
+
+	//flood-fill from the exterior white cells to mark all connected white cells as exterior
+	for (size_t readIdx = 0; readIdx < queue.size(); ++readIdx) {
+		forEachCrossNeighbor(queue[readIdx], grid, [&](uint neighborIdx) {
+			addExteriorWhite(neighborIdx);
+			return true;
+		});
+	}
+
+	//if any white cell is not marked as exterior, it is an enclosed hole
+	std::vector<uint> enclosedWhiteCellIds;
+	for (uint idx = 0; idx < cells.size(); ++idx) {
+		if (!cells[idx].hasHit && !exteriorWhite[idx]) {
+			enclosedWhiteCellIds.push_back(idx);
+		}
+	}
+
+	if (enclosedWhiteCellIds.empty()) {
+		return false;
+	}
+
+	if (debug) {
+		PolyMesh enclosedWhiteMesh;
+		enclosedWhiteMesh.enablePerVertexColor();
+
+		for (const uint idx : enclosedWhiteCellIds) {
+			const Point3d cellCenter = cells[idx].cellCenter;
+			const uint vertexId = enclosedWhiteMesh.addVertex(cellCenter);
+			enclosedWhiteMesh.vertex(vertexId).color() = Color::Green;
+		}
+
+		const std::filesystem::path debugOutputDir =
+			std::filesystem::path(RESULTS_PATH) / debugResultsSubdir;
+		std::filesystem::create_directories(debugOutputDir);
+		vcl::saveMesh(
+			enclosedWhiteMesh,
+			(debugOutputDir / "enclosed_white_cells.ply").string());
 	}
 
 	return true;

@@ -178,7 +178,7 @@ static CellData shootRayOnCell(
 				computeHitPoint(m, faceId, triId, baryCoords, invalidPoint)};
 			result.hasHit = result.hitPoints[0] != invalidPoint;
 			result.hasClampedHit = false;
-			result.clampedDistance = result.distance;
+			// result.clampedDistance = result.distance;
 
 			return result;
 		}
@@ -202,7 +202,7 @@ static CellData shootRayOnCell(
 			}
 			result.hasHit = true;
 			result.hasClampedHit = false;
-			result.clampedDistance = result.distance;
+			// result.clampedDistance = result.distance;
 
 			return result;
 		}
@@ -214,7 +214,7 @@ static CellData shootRayOnCell(
 	result.hitPoints = {invalidPoint};
 	result.hasHit = false;
 	result.hasClampedHit = false;
-	result.clampedDistance = maxDistance;
+	// result.clampedDistance = maxDistance;
 
 	return result;
 }
@@ -353,7 +353,7 @@ static CellData makeCellGeometry(
 	cell.hitPoints = {cell.cellCenter};
 	cell.hasHit = false;
 	cell.hasClampedHit = false;
-	cell.clampedDistance = 0.0;
+	// cell.clampedDistance = 0.0;
 
 	return cell;
 }
@@ -373,7 +373,7 @@ static void computeClampedCell(
 
 	if (!baseCell.hasHit) {
 		cells[i].hasClampedHit = false;
-		cells[i].clampedDistance = baseCell.distance;
+		// cells[i].clampedDistance = baseCell.distance;
 		return;
 	}
 
@@ -410,18 +410,16 @@ static void computeClampedCell(
 
 	if (!anyCone) {
 		cells[i].hasClampedHit = false;
-		cells[i].clampedDistance = baseCell.distance;
+		// cells[i].clampedDistance = baseCell.distance;
 		return;
 	}
 
-	const Point3d currentPoint =
-		original - direction * requiredT;
-
-	const double distanceToPlane =
-		std::abs((currentPoint - planePoint).dot(direction));
-
 	cells[i].hasClampedHit = true;
-	cells[i].clampedDistance = distanceToPlane;
+	// The clamping phase now marks the cell without changing its distance.
+	// const Point3d currentPoint = original - direction * requiredT;
+	// const double distanceToPlane =
+	// 	std::abs((currentPoint - planePoint).dot(direction));
+	// cells[i].clampedDistance = distanceToPlane;
 }
 
 #endif
