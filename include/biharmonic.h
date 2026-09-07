@@ -44,6 +44,36 @@ struct BiharmonicBounds
 	Eigen::VectorXd upper;
 };
 
+struct BiharmonicWhiteMagentaBounds
+{
+	std::vector<double> upper;
+	std::vector<unsigned char> constrained;
+};
+
+static std::array<vcl::uint, 4> biharmonicCrossNeighborIds(
+	vcl::uint idx,
+	const GridChoice& grid,
+	vcl::uint& neighborCount)
+{
+	std::array<vcl::uint, 4> neighbors{};
+	neighborCount = 0;
+	const vcl::uint row = idx / grid.cols;
+	const vcl::uint col = idx % grid.cols;
+	if (col > 0) {
+		neighbors[neighborCount++] = idx - 1;
+	}
+	if (col + 1 < grid.cols) {
+		neighbors[neighborCount++] = idx + 1;
+	}
+	if (row > 0) {
+		neighbors[neighborCount++] = idx - grid.cols;
+	}
+	if (row + 1 < grid.rows) {
+		neighbors[neighborCount++] = idx + grid.cols;
+	}
+	return neighbors;
+}
+
 static void biharmonicSetCellDistance(
 	CellData& cell,
 	double distance,
@@ -212,13 +242,18 @@ static BiharmonicCellSelection biharmonicSelectWhiteFillCells(
 		}
 
 		bool touchesUnknown = false;
-		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
+		uint neighborCount = 0;
+		const std::array<uint, 4> neighbors =
+			biharmonicCrossNeighborIds(idx, grid, neighborCount);
+		for (uint neighborOffset = 0;
+			 neighborOffset < neighborCount;
+			 ++neighborOffset) {
+			const uint neighborIdx = neighbors[neighborOffset];
 			if (selection.variableIds[neighborIdx] >= 0) {
 				touchesUnknown = true;
-				return false;
+				break;
 			}
-			return true;
-		});
+		}
 
 		if (touchesUnknown) {
 			selection.fixedCellIds.push_back(idx);
@@ -248,23 +283,17 @@ static void biharmonicCollectFixedAnchors(
 		bool touchesUnknown = false;
 
 		if (collarRadius == 0) {
-			const auto checkNeighbor = [&](uint neighborIdx) {
+			uint neighborCount = 0;
+			const std::array<uint, 4> neighbors =
+				biharmonicCrossNeighborIds(idx, grid, neighborCount);
+			for (uint neighborOffset = 0;
+				 neighborOffset < neighborCount;
+				 ++neighborOffset) {
+				const uint neighborIdx = neighbors[neighborOffset];
 				if (selection.variableIds[neighborIdx] >= 0) {
 					touchesUnknown = true;
+					break;
 				}
-			};
-
-			if (col > 0) {
-				checkNeighbor(idx - 1);
-			}
-			if (!touchesUnknown && col + 1 < grid.cols) {
-				checkNeighbor(idx + 1);
-			}
-			if (!touchesUnknown && row > 0) {
-				checkNeighbor(idx - grid.cols);
-			}
-			if (!touchesUnknown && row + 1 < grid.rows) {
-				checkNeighbor(idx + grid.cols);
 			}
 		}
 		else {
@@ -456,19 +485,23 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 
 	for (uint rowIdx = 0; rowIdx < laplacianRowCellIds.size(); ++rowIdx) {
 		const uint cellIdx = laplacianRowCellIds[rowIdx];
-		const uint cellRow = cellIdx / grid.cols;
-		const uint cellCol = cellIdx % grid.cols;
 		uint usedNeighborCount = 0;
 
 		// Add unknown neighbors to the matrix and fixed ones to the RHS.
-		const auto addNeighbor = [&](uint neighborIdx) {
+		uint neighborCount = 0;
+		const std::array<uint, 4> neighbors =
+			biharmonicCrossNeighborIds(cellIdx, grid, neighborCount);
+		for (uint neighborOffset = 0;
+			 neighborOffset < neighborCount;
+			 ++neighborOffset) {
+			const uint neighborIdx = neighbors[neighborOffset];
 			if (variableIds[neighborIdx] >= 0) {
 				laplacianTriplets.emplace_back(
 					static_cast<int>(rowIdx),
 					variableIds[neighborIdx],
 					1.0);
 				++usedNeighborCount;
-				return;
+				continue;
 			}
 
 			if (fixedIdsMask[neighborIdx]) {
@@ -476,19 +509,6 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 					depthCells[neighborIdx].distance;
 				++usedNeighborCount;
 			}
-		};
-
-		if (cellCol > 0) {
-			addNeighbor(cellIdx - 1);
-		}
-		if (cellCol + 1 < grid.cols) {
-			addNeighbor(cellIdx + 1);
-		}
-		if (cellRow > 0) {
-			addNeighbor(cellIdx - grid.cols);
-		}
-		if (cellRow + 1 < grid.rows) {
-			addNeighbor(cellIdx + grid.cols);
 		}
 
 		if (usedNeighborCount == 0) {
@@ -701,6 +721,49 @@ static bool biharmonicIsWhiteForwardCapCandidate(
 		std::isfinite(depthCells[idx].distance);
 }
 
+static void biharmonicSeedWhiteBoundaryDistances(
+	const std::vector<CellData>& cells,
+	const std::vector<CellData>& depthCells,
+	const GridChoice& grid,
+	bool orangeOnly,
+	vcl::uint invalidDistance,
+	std::vector<vcl::uint>& distances,
+	std::vector<vcl::uint>& queue)
+{
+	for (vcl::uint idx = 0; idx < depthCells.size(); ++idx) {
+		if (distances[idx] != invalidDistance ||
+			!biharmonicIsWhiteForwardCapCandidate(
+				cells,
+				depthCells,
+				idx)) {
+			continue;
+		}
+
+		bool touchesBoundaryHit = false;
+		vcl::uint neighborCount = 0;
+		const std::array<vcl::uint, 4> neighbors =
+			biharmonicCrossNeighborIds(idx, grid, neighborCount);
+		for (vcl::uint neighborOffset = 0;
+			 neighborOffset < neighborCount;
+			 ++neighborOffset) {
+			const vcl::uint neighborIdx = neighbors[neighborOffset];
+			const bool isBoundaryHit =
+				depthCells[neighborIdx].hasHit &&
+				(!orangeOnly ||
+				 depthCells[neighborIdx].isBiharmonicFilledHit);
+			if (isBoundaryHit) {
+				touchesBoundaryHit = true;
+				break;
+			}
+		}
+
+		if (touchesBoundaryHit) {
+			distances[idx] = 1;
+			queue.push_back(idx);
+		}
+	}
+}
+
 static std::vector<vcl::uint> biharmonicWhiteBoundaryDistances(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& depthCells,
@@ -713,45 +776,34 @@ static std::vector<vcl::uint> biharmonicWhiteBoundaryDistances(
 	std::vector<uint> queue;
 	queue.reserve(depthCells.size());
 
-	const auto seedBoundaryWhites = [&](bool orangeOnly) {
-		for (uint idx = 0; idx < depthCells.size(); ++idx) {
-			if (distances[idx] != invalidDistance ||
-				!biharmonicIsWhiteForwardCapCandidate(
-					cells,
-					depthCells,
-					idx)) {
-				continue;
-			}
-
-			bool touchesBoundaryHit = false;
-			forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
-				const bool isBoundaryHit =
-					neighborIdx < depthCells.size() &&
-					depthCells[neighborIdx].hasHit &&
-					(!orangeOnly || depthCells[neighborIdx].isBiharmonicFilledHit);
-				if (isBoundaryHit) {
-					touchesBoundaryHit = true;
-					return false;
-				}
-				return true;
-			});
-
-			if (touchesBoundaryHit) {
-				// The first white-cell ring next to the orange boundary has d = 1.
-				distances[idx] = 1;
-				queue.push_back(idx);
-			}
-		}
-	};
-
-	seedBoundaryWhites(true);
+	biharmonicSeedWhiteBoundaryDistances(
+		cells,
+		depthCells,
+		grid,
+		true,
+		invalidDistance,
+		distances,
+		queue);
 	if (queue.empty()) {
-		seedBoundaryWhites(false);
+		biharmonicSeedWhiteBoundaryDistances(
+			cells,
+			depthCells,
+			grid,
+			false,
+			invalidDistance,
+			distances,
+			queue);
 	}
 
 	for (size_t readIdx = 0; readIdx < queue.size(); ++readIdx) {
 		const uint idx = queue[readIdx];
-		forEachCrossNeighbor(idx, grid, [&](uint neighborIdx) {
+		uint neighborCount = 0;
+		const std::array<uint, 4> neighbors =
+			biharmonicCrossNeighborIds(idx, grid, neighborCount);
+		for (uint neighborOffset = 0;
+			 neighborOffset < neighborCount;
+			 ++neighborOffset) {
+			const uint neighborIdx = neighbors[neighborOffset];
 			if (distances[neighborIdx] == invalidDistance &&
 				biharmonicIsWhiteForwardCapCandidate(
 					cells,
@@ -760,8 +812,7 @@ static std::vector<vcl::uint> biharmonicWhiteBoundaryDistances(
 				distances[neighborIdx] = distances[idx] + 1;
 				queue.push_back(neighborIdx);
 			}
-			return true;
-		});
+		}
 	}
 
 	return distances;
@@ -803,6 +854,524 @@ static double biharmonicWhiteForwardCapDistance(
 		(heightOffset + static_cast<double>(boundaryDistance) * heightGrowthPerCell));
 	return cells[cellIdx].distance - height;
 }
+
+// Apply the configured opening slope between a source and a target.
+static double biharmonicMagentaUpperBound(
+	const CellData& sourceCell,
+	double sourceUpperBound,
+	const CellData& targetCell,
+	const vcl::Point3d& direction,
+	double angleCotangent,
+	double eps)
+{
+	vcl::Point3d normalizedDirection = direction;
+	const double directionNorm = normalizedDirection.norm();
+	if (directionNorm <= std::abs(eps)) {
+		return sourceUpperBound;
+	}
+	normalizedDirection /= directionNorm;
+
+	const vcl::Point3d centerDelta =
+		targetCell.cellCenter - sourceCell.cellCenter;
+	const vcl::Point3d planeDelta =
+		centerDelta - normalizedDirection * centerDelta.dot(normalizedDirection);
+	const double requiredT = planeDelta.norm() * angleCotangent;
+	return sourceUpperBound - requiredT;
+}
+
+static bool biharmonicIsOrangeCell(
+	const std::vector<CellData>& depthCells,
+	vcl::uint idx)
+{
+	return idx < depthCells.size() &&
+		!depthCells[idx].isDiscarded &&
+		depthCells[idx].hasHit &&
+		depthCells[idx].isBiharmonicFilledHit &&
+		!depthCells[idx].hasClampedHit &&
+		std::isfinite(depthCells[idx].distance);
+}
+
+static bool biharmonicIsMagentaTarget(
+	const std::vector<CellData>& cells,
+	const std::vector<CellData>& depthCells,
+	vcl::uint idx)
+{
+	return idx < depthCells.size() &&
+		idx < cells.size() &&
+		!cells[idx].hasHit &&
+		!depthCells[idx].hasHit &&
+		!depthCells[idx].isDiscarded &&
+		std::isfinite(depthCells[idx].distance);
+}
+
+static bool biharmonicAddMagentaPoint(
+	const std::vector<CellData>& cells,
+	const std::vector<CellData>& depthCells,
+	vcl::uint sourceIdx,
+	double sourceUpperBound,
+	vcl::uint targetIdx,
+	const vcl::Point3d& direction,
+	double angleCotangent,
+	double eps,
+	BiharmonicWhiteMagentaBounds& bounds,
+	double& targetUpperBound)
+{
+	if (sourceIdx >= depthCells.size() ||
+		!biharmonicIsMagentaTarget(cells, depthCells, targetIdx)) {
+		return false;
+	}
+
+	const double candidateUpperBound =
+		biharmonicMagentaUpperBound(
+			depthCells[sourceIdx],
+			sourceUpperBound,
+			depthCells[targetIdx],
+			direction,
+			angleCotangent,
+			eps);
+	bounds.upper[targetIdx] = std::min(
+		bounds.upper[targetIdx],
+		candidateUpperBound);
+	targetUpperBound = bounds.upper[targetIdx];
+	bounds.constrained[targetIdx] = true;
+	return true;
+}
+
+static vcl::uint biharmonicNearestOrange(
+	const std::vector<vcl::uint>& candidates,
+	const std::vector<CellData>& depthCells,
+	const GridChoice& grid,
+	vcl::uint targetRow,
+	vcl::uint targetCol)
+{
+	const vcl::uint invalidIdx = std::numeric_limits<vcl::uint>::max();
+	vcl::uint nearestIdx = invalidIdx;
+	vcl::uint nearestGridDistance = std::numeric_limits<vcl::uint>::max();
+	for (vcl::uint candidateIdx : candidates) {
+		const vcl::uint candidateRow = candidateIdx / grid.cols;
+		const vcl::uint candidateCol = candidateIdx % grid.cols;
+		const vcl::uint rowDistance = candidateRow > targetRow ?
+			candidateRow - targetRow : targetRow - candidateRow;
+		const vcl::uint colDistance = candidateCol > targetCol ?
+			candidateCol - targetCol : targetCol - candidateCol;
+		const vcl::uint gridDistance = rowDistance + colDistance;
+		if (gridDistance < nearestGridDistance ||
+			(gridDistance == nearestGridDistance &&
+			 (nearestIdx == invalidIdx ||
+			  depthCells[candidateIdx].distance <
+				depthCells[nearestIdx].distance))) {
+			nearestIdx = candidateIdx;
+			nearestGridDistance = gridDistance;
+		}
+	}
+	return nearestIdx;
+}
+
+static vcl::uint biharmonicNearestOrangeOnDiagonal(
+	const std::vector<vcl::uint>& orangeCells,
+	const std::vector<CellData>& depthCells,
+	const GridChoice& grid,
+	vcl::uint targetRow,
+	vcl::uint targetCol,
+	bool towardLowerRows,
+	bool towardLowerCols)
+{
+	const vcl::uint invalidIdx = std::numeric_limits<vcl::uint>::max();
+	vcl::uint nearestIdx = invalidIdx;
+	vcl::uint nearestDiagonalDistance =
+		std::numeric_limits<vcl::uint>::max();
+	for (vcl::uint candidateIdx : orangeCells) {
+		const vcl::uint candidateRow = candidateIdx / grid.cols;
+		const vcl::uint candidateCol = candidateIdx % grid.cols;
+		const bool isInsideAlongRow = towardLowerRows ?
+			candidateRow > targetRow : candidateRow < targetRow;
+		const bool isInsideAlongCol = towardLowerCols ?
+			candidateCol > targetCol : candidateCol < targetCol;
+		if (!isInsideAlongRow || !isInsideAlongCol) {
+			continue;
+		}
+
+		const vcl::uint rowDistance = candidateRow > targetRow ?
+			candidateRow - targetRow : targetRow - candidateRow;
+		const vcl::uint colDistance = candidateCol > targetCol ?
+			candidateCol - targetCol : targetCol - candidateCol;
+		if (rowDistance != colDistance) {
+			continue;
+		}
+
+		if (rowDistance < nearestDiagonalDistance ||
+			(rowDistance == nearestDiagonalDistance &&
+			 (nearestIdx == invalidIdx ||
+			  depthCells[candidateIdx].distance <
+				depthCells[nearestIdx].distance))) {
+			nearestIdx = candidateIdx;
+			nearestDiagonalDistance = rowDistance;
+		}
+	}
+	return nearestIdx;
+}
+
+static void biharmonicAddDiagonalMagentaChain(
+	const std::vector<CellData>& cells,
+	const std::vector<CellData>& depthCells,
+	const GridChoice& grid,
+	const vcl::Point3d& direction,
+	double angleCotangent,
+	vcl::uint magentaCellInterval,
+	double eps,
+	const std::vector<vcl::uint>& orangeCells,
+	vcl::uint cornerRow,
+	vcl::uint cornerCol,
+	bool towardLowerRows,
+	bool towardLowerCols,
+	BiharmonicWhiteMagentaBounds& bounds)
+{
+	const vcl::uint invalidIdx = std::numeric_limits<vcl::uint>::max();
+	vcl::uint row = cornerRow;
+	vcl::uint col = cornerCol;
+	vcl::uint sourceIdx = invalidIdx;
+	double sourceUpperBound = 0.0;
+	while (true) {
+		if ((towardLowerRows && row < magentaCellInterval) ||
+			(!towardLowerRows &&
+			 grid.rows - 1 - row < magentaCellInterval) ||
+			(towardLowerCols && col < magentaCellInterval) ||
+			(!towardLowerCols &&
+			 grid.cols - 1 - col < magentaCellInterval)) {
+			break;
+		}
+
+		const vcl::uint targetRow = towardLowerRows ?
+			row - magentaCellInterval : row + magentaCellInterval;
+		const vcl::uint targetCol = towardLowerCols ?
+			col - magentaCellInterval : col + magentaCellInterval;
+		const vcl::uint targetIdx = targetRow * grid.cols + targetCol;
+		if (sourceIdx == invalidIdx) {
+			sourceIdx = biharmonicNearestOrangeOnDiagonal(
+				orangeCells,
+				depthCells,
+				grid,
+				targetRow,
+				targetCol,
+				towardLowerRows,
+				towardLowerCols);
+			if (sourceIdx == invalidIdx) {
+				break;
+			}
+			sourceUpperBound = depthCells[sourceIdx].distance;
+		}
+
+		double targetUpperBound = 0.0;
+		if (!biharmonicAddMagentaPoint(
+				cells,
+				depthCells,
+				sourceIdx,
+				sourceUpperBound,
+				targetIdx,
+				direction,
+				angleCotangent,
+				eps,
+				bounds,
+				targetUpperBound)) {
+			break;
+		}
+
+		row = targetRow;
+		col = targetCol;
+		sourceIdx = targetIdx;
+		sourceUpperBound = targetUpperBound;
+	}
+}
+
+// Build a bounding box from orange cells only. Starting at its edges, sample
+// rows and columns at the configured interval, then place magenta points at
+// that interval outside the box, including four diagonal chains. The first
+// magenta of each chain starts from the geometrically nearest orange on the
+// same row, column, or diagonal; later points start from the previous magenta.
+static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
+	const std::vector<CellData>& cells,
+	const std::vector<CellData>& depthCells,
+	const GridChoice& grid,
+	const vcl::Point3d& direction,
+	double magentaAngleDegrees,
+	vcl::uint magentaCellInterval,
+	double eps)
+{
+	using namespace vcl;
+
+	const uint invalidIdx = std::numeric_limits<uint>::max();
+
+	BiharmonicWhiteMagentaBounds bounds;
+	bounds.upper.assign(
+		depthCells.size(),
+		std::numeric_limits<double>::infinity());
+	bounds.constrained.assign(depthCells.size(), false);
+
+	if (depthCells.size() != cells.size() ||
+		depthCells.size() != grid.rows * grid.cols ||
+		grid.rows == 0 ||
+		grid.cols == 0 ||
+		magentaCellInterval == 0 ||
+		!std::isfinite(magentaAngleDegrees) ||
+		magentaAngleDegrees <= 0.0 ||
+		magentaAngleDegrees >= 90.0) {
+		return bounds;
+	}
+	const double angleRadians =
+		magentaAngleDegrees * M_PI / 180.0;
+	const double angleCotangent =
+		1.0 / std::tan(angleRadians);
+
+	uint minOrangeRow = grid.rows;
+	uint maxOrangeRow = 0;
+	uint minOrangeCol = grid.cols;
+	uint maxOrangeCol = 0;
+	bool hasOrangeCell = false;
+	std::vector<std::vector<uint>> orangeByRow(grid.rows);
+	std::vector<std::vector<uint>> orangeByCol(grid.cols);
+	std::vector<uint> orangeCells;
+
+	for (uint idx = 0; idx < depthCells.size(); ++idx) {
+		if (!biharmonicIsOrangeCell(depthCells, idx)) {
+			continue;
+		}
+
+		const uint row = idx / grid.cols;
+		const uint col = idx % grid.cols;
+		minOrangeRow = std::min(minOrangeRow, row);
+		maxOrangeRow = std::max(maxOrangeRow, row);
+		minOrangeCol = std::min(minOrangeCol, col);
+		maxOrangeCol = std::max(maxOrangeCol, col);
+		hasOrangeCell = true;
+
+		orangeByRow[row].push_back(idx);
+		orangeByCol[col].push_back(idx);
+		orangeCells.push_back(idx);
+	}
+
+	if (!hasOrangeCell) {
+		return bounds;
+	}
+
+	// Horizontal chains start from the left/right bounding-box borders. Rows
+	// are sampled at the same interval, so a vertical band is not continuous.
+	for (uint row = minOrangeRow; row <= maxOrangeRow;) {
+		if (!orangeByRow[row].empty()) {
+			uint sourceIdx = invalidIdx;
+			double sourceUpperBound = 0.0;
+			for (uint col = minOrangeCol;
+				 col >= magentaCellInterval;
+				 col -= magentaCellInterval) {
+				const uint targetCol = col - magentaCellInterval;
+				const uint targetIdx = row * grid.cols + targetCol;
+				if (sourceIdx == invalidIdx) {
+					sourceIdx = biharmonicNearestOrange(
+						orangeByRow[row],
+						depthCells,
+						grid,
+						row,
+						targetCol);
+					sourceUpperBound = depthCells[sourceIdx].distance;
+				}
+				double targetUpperBound = 0.0;
+				if (!biharmonicAddMagentaPoint(
+						cells,
+						depthCells,
+						sourceIdx,
+						sourceUpperBound,
+						targetIdx,
+						direction,
+						angleCotangent,
+						eps,
+						bounds,
+						targetUpperBound)) {
+					break;
+				}
+				sourceIdx = targetIdx;
+				sourceUpperBound = targetUpperBound;
+			}
+
+			sourceIdx = invalidIdx;
+			sourceUpperBound = 0.0;
+			for (uint col = maxOrangeCol;
+				 grid.cols - 1 - col >= magentaCellInterval;
+				 col += magentaCellInterval) {
+				const uint targetCol = col + magentaCellInterval;
+				const uint targetIdx = row * grid.cols + targetCol;
+				if (sourceIdx == invalidIdx) {
+					sourceIdx = biharmonicNearestOrange(
+						orangeByRow[row],
+						depthCells,
+						grid,
+						row,
+						targetCol);
+					sourceUpperBound = depthCells[sourceIdx].distance;
+				}
+				double targetUpperBound = 0.0;
+				if (!biharmonicAddMagentaPoint(
+						cells,
+						depthCells,
+						sourceIdx,
+						sourceUpperBound,
+						targetIdx,
+						direction,
+						angleCotangent,
+						eps,
+						bounds,
+						targetUpperBound)) {
+					break;
+				}
+				sourceIdx = targetIdx;
+				sourceUpperBound = targetUpperBound;
+			}
+		}
+
+		if (maxOrangeRow - row < magentaCellInterval) {
+			break;
+		}
+		row += magentaCellInterval;
+	}
+
+	// Vertical chains start from the top/bottom bounding-box borders. Columns
+	// are sampled at the same interval, so a horizontal band is not continuous.
+	for (uint col = minOrangeCol; col <= maxOrangeCol;) {
+		if (!orangeByCol[col].empty()) {
+			uint sourceIdx = invalidIdx;
+			double sourceUpperBound = 0.0;
+			for (uint row = minOrangeRow;
+				 row >= magentaCellInterval;
+				 row -= magentaCellInterval) {
+				const uint targetRow = row - magentaCellInterval;
+				const uint targetIdx = targetRow * grid.cols + col;
+				if (sourceIdx == invalidIdx) {
+					sourceIdx = biharmonicNearestOrange(
+						orangeByCol[col],
+						depthCells,
+						grid,
+						targetRow,
+						col);
+					sourceUpperBound = depthCells[sourceIdx].distance;
+				}
+				double targetUpperBound = 0.0;
+				if (!biharmonicAddMagentaPoint(
+						cells,
+						depthCells,
+						sourceIdx,
+						sourceUpperBound,
+						targetIdx,
+						direction,
+						angleCotangent,
+						eps,
+						bounds,
+						targetUpperBound)) {
+					break;
+				}
+				sourceIdx = targetIdx;
+				sourceUpperBound = targetUpperBound;
+			}
+
+			sourceIdx = invalidIdx;
+			sourceUpperBound = 0.0;
+			for (uint row = maxOrangeRow;
+				 grid.rows - 1 - row >= magentaCellInterval;
+				 row += magentaCellInterval) {
+				const uint targetRow = row + magentaCellInterval;
+				const uint targetIdx = targetRow * grid.cols + col;
+				if (sourceIdx == invalidIdx) {
+					sourceIdx = biharmonicNearestOrange(
+						orangeByCol[col],
+						depthCells,
+						grid,
+						targetRow,
+						col);
+					sourceUpperBound = depthCells[sourceIdx].distance;
+				}
+				double targetUpperBound = 0.0;
+				if (!biharmonicAddMagentaPoint(
+						cells,
+						depthCells,
+						sourceIdx,
+						sourceUpperBound,
+						targetIdx,
+						direction,
+						angleCotangent,
+						eps,
+						bounds,
+						targetUpperBound)) {
+					break;
+				}
+				sourceIdx = targetIdx;
+				sourceUpperBound = targetUpperBound;
+			}
+		}
+
+		if (maxOrangeCol - col < magentaCellInterval) {
+			break;
+		}
+		col += magentaCellInterval;
+	}
+
+	// Add the four diagonal chains. Only the first point uses the nearest
+	// orange on that diagonal; every later point uses the previous magenta.
+	biharmonicAddDiagonalMagentaChain(
+		cells,
+		depthCells,
+		grid,
+		direction,
+		angleCotangent,
+		magentaCellInterval,
+		eps,
+		orangeCells,
+		minOrangeRow,
+		minOrangeCol,
+		true,
+		true,
+		bounds);
+	biharmonicAddDiagonalMagentaChain(
+		cells,
+		depthCells,
+		grid,
+		direction,
+		angleCotangent,
+		magentaCellInterval,
+		eps,
+		orangeCells,
+		minOrangeRow,
+		maxOrangeCol,
+		true,
+		false,
+		bounds);
+	biharmonicAddDiagonalMagentaChain(
+		cells,
+		depthCells,
+		grid,
+		direction,
+		angleCotangent,
+		magentaCellInterval,
+		eps,
+		orangeCells,
+		maxOrangeRow,
+		minOrangeCol,
+		false,
+		true,
+		bounds);
+	biharmonicAddDiagonalMagentaChain(
+		cells,
+		depthCells,
+		grid,
+		direction,
+		angleCotangent,
+		magentaCellInterval,
+		eps,
+		orangeCells,
+		maxOrangeRow,
+		maxOrangeCol,
+		false,
+		false,
+		bounds);
+
+	return bounds;
+}
 // Constrain white cells using the distance-dependent height offset.
 static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 	const std::vector<CellData>& cells,
@@ -810,7 +1379,8 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 	const std::vector<vcl::uint>& variableCellIds,
 	const GridChoice& grid,
 	const BiharmonicLinearSystem& linearSystem,
-	double maxDistance)
+	double maxDistance,
+	const BiharmonicWhiteMagentaBounds* magentaBounds)
 {
 	const size_t variableCount = variableCellIds.size();
 
@@ -841,6 +1411,14 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 					cellIdx,
 					maxDistance,
 					whiteBoundaryDistances);
+		}
+
+		if (magentaBounds != nullptr &&
+			cellIdx < magentaBounds->constrained.size() &&
+			magentaBounds->constrained[cellIdx]) {
+			bounds.upper(variableIdx) = std::min(
+				bounds.upper(variableIdx),
+				magentaBounds->upper[cellIdx]);
 		}
 	}
 
@@ -963,6 +1541,21 @@ static Eigen::VectorXd biharmonicInitialDistances(
 	return initialDistances;
 }
 
+static bool biharmonicIsUpperBoundActive(
+	double distance,
+	double upperBound,
+	double eps)
+{
+	if (!std::isfinite(upperBound)) {
+		return false;
+	}
+	const double activeTolerance = std::max(
+		1e-10,
+		10.0 * std::abs(eps) *
+			std::max(1.0, std::abs(upperBound)));
+	return std::abs(distance - upperBound) <= activeTolerance;
+}
+
 // Write solved distances back and mark whites that reached their computed
 // originalDistance-minus-height upper bound as cyan.
 static void biharmonicApplyWhiteSolution(
@@ -973,7 +1566,8 @@ static void biharmonicApplyWhiteSolution(
 	const Eigen::VectorXd& solvedDistances,
 	const vcl::Point3d& direction,
 	double eps,
-	double maxDistance)
+	double maxDistance,
+	const BiharmonicWhiteMagentaBounds* magentaBounds)
 {
 	const std::vector<vcl::uint> whiteBoundaryDistances =
 		std::isfinite(maxDistance) ?
@@ -990,29 +1584,43 @@ static void biharmonicApplyWhiteSolution(
 			continue;
 		}
 
-		CellData& cell = depthCells[cellIdx];
-		biharmonicSetCellDistance(cell, distance, direction);
-		
-		// Mark cells touching their distance-minus-height cap as cyan.
-		if (std::isfinite(maxDistance) &&
+		const bool hasMagentaUpperBound =
+			magentaBounds != nullptr &&
+			cellIdx < magentaBounds->constrained.size() &&
+			magentaBounds->constrained[cellIdx];
+		const double magentaUpperBound =
+			hasMagentaUpperBound ? magentaBounds->upper[cellIdx] :
+				std::numeric_limits<double>::infinity();
+		const bool isCyanUpperBoundCandidate =
+			std::isfinite(maxDistance) &&
 			std::isfinite(cells[cellIdx].distance) &&
 			biharmonicIsWhiteForwardCapCandidate(
 				cells,
 				depthCells,
-				cellIdx)) {
-			const double upperBound =
+				cellIdx);
+		const double cyanUpperBound =
+			isCyanUpperBoundCandidate ?
 				biharmonicWhiteForwardCapDistance(
 					cells,
 					cellIdx,
 					maxDistance,
-					whiteBoundaryDistances);
-			const double activeTolerance = std::max(
-				1e-10,
-				10.0 * static_cast<double>(eps) *
-					std::max(1.0, std::abs(upperBound)));
-			cell.isMovedForward =
-				distance >= upperBound - activeTolerance;
-		}
+					whiteBoundaryDistances) :
+				std::numeric_limits<double>::infinity();
+		const bool hasCyanUpperBound =
+			std::isfinite(cyanUpperBound);
+		CellData& cell = depthCells[cellIdx];
+		biharmonicSetCellDistance(cell, distance, direction);
+		cell.hasBiharmonicWhiteMagentaBound =
+			hasMagentaUpperBound;
+		cell.biharmonicWhiteMagentaUpperBound = magentaUpperBound;
+		cell.isMovedForward =
+			hasCyanUpperBound &&
+			biharmonicIsUpperBoundActive(
+				distance, cyanUpperBound, eps);
+		cell.isBiharmonicWhiteMagentaBoundActive =
+			hasMagentaUpperBound &&
+			biharmonicIsUpperBoundActive(
+				distance, magentaUpperBound, eps);
 	}
 
 	updateDepthCellInsideFlags(cells, depthCells, eps);
@@ -1024,7 +1632,6 @@ static void biharmonicApplyHitSolution(
 	std::vector<CellData>& depthCells,
 	const std::vector<vcl::uint>& variableCellIds,
 	const std::vector<double>& originalDistanceWeights,
-	const std::vector<unsigned char>* cyanCells,
 	const GridChoice& grid,
 	const Eigen::VectorXd& solvedDistances,
 	const vcl::Point3d& direction,
@@ -1050,10 +1657,6 @@ static void biharmonicApplyHitSolution(
 
 		// Remember the incoming state before replacing the cell depth.
 		CellData& cell = depthCells[cellIdx];
-		const bool wasCyan =
-			cyanCells != nullptr &&
-			cyanCells->size() == depthCells.size() &&
-			(*cyanCells)[cellIdx];
 		const bool wasRedHit =
 			cell.hasHit && !cell.hasClampedHit;
 		const double originalDistance = cell.distance;
@@ -1074,8 +1677,9 @@ static void biharmonicApplyHitSolution(
 				direction);
 		}
 
-		// Preserve existing cyan cells and mark cells still touching their
-		// distance-minus-height cap.
+		cell.isMovedForward = false;
+		cell.isBiharmonicWhiteMagentaBoundActive = false;
+		// Mark cells that still touch their cyan distance-minus-height cap.
 		if (useBoxConstraints &&
 			!cell.hasHit &&
 			std::isfinite(cells[cellIdx].distance) &&
@@ -1094,11 +1698,21 @@ static void biharmonicApplyHitSolution(
 				10.0 * static_cast<double>(eps) *
 					std::max(1.0, std::abs(upperBound)));
 			cell.isMovedForward =
-				wasCyan ||
-				cell.distance >= upperBound - activeTolerance;
+				std::abs(cell.distance - upperBound) <= activeTolerance;
 		}
-		else if (wasCyan) {
-			cell.isMovedForward = true;
+
+		if (cell.hasBiharmonicWhiteMagentaBound &&
+			std::isfinite(cell.biharmonicWhiteMagentaUpperBound)) {
+			const double activeTolerance = std::max(
+				1e-10,
+				10.0 * static_cast<double>(eps) *
+					std::max(
+						1.0,
+						std::abs(cell.biharmonicWhiteMagentaUpperBound)));
+			cell.isBiharmonicWhiteMagentaBoundActive =
+				std::abs(
+					cell.distance - cell.biharmonicWhiteMagentaUpperBound) <=
+				activeTolerance;
 		}
 
 		// Mark original red hits updated by this pass.
@@ -1117,7 +1731,10 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 	const GridChoice& grid,
 	const vcl::Point3d& direction,
 	double eps,
-	double maxDistance = std::numeric_limits<double>::infinity())
+	double maxDistance = std::numeric_limits<double>::infinity(),
+	bool addMagentaBounds = false,
+	double magentaAngleDegrees = 45.0,
+	vcl::uint magentaCellInterval = 20)
 {
 	if (depthCells.size() != cells.size() ||
 		depthCells.size() != grid.rows * grid.cols) {
@@ -1142,6 +1759,20 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 			  << "\n";
 	std::cout.flush();
 
+	const BiharmonicWhiteMagentaBounds magentaBounds =
+		addMagentaBounds ?
+			biharmonicBuildWhiteMagentaBounds(
+				cells,
+				depthCells,
+				grid,
+				direction,
+				magentaAngleDegrees,
+				magentaCellInterval,
+				eps) :
+			BiharmonicWhiteMagentaBounds();
+	const BiharmonicWhiteMagentaBounds* activeMagentaBounds =
+		addMagentaBounds ? &magentaBounds : nullptr;
+
 	// Build the same biharmonic system used by both passes.
 	const BiharmonicLinearSystem linearSystem =
 		biharmonicBuildSystem(
@@ -1163,7 +1794,8 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 			selection.variableCellIds,
 			grid,
 			linearSystem,
-			maxDistance);
+			maxDistance,
+			activeMagentaBounds);
 
 	if (!solveResult.success) {
 		return depthCells;
@@ -1183,7 +1815,8 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 		solveResult.distances,
 		direction,
 		eps,
-		maxDistance);
+		maxDistance,
+		activeMagentaBounds);
 
 	std::cout << "  biharmonic done\n";
 	std::cout.flush();
@@ -1297,7 +1930,6 @@ static std::vector<CellData> biharmonicFillHitCells(
 		depthCells,
 		selection.variableCellIds,
 		selection.originalDistanceWeights,
-		cyanCells,
 		grid,
 		solveResult.distances,
 		direction,

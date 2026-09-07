@@ -84,6 +84,8 @@ static std::vector<CellData> fixDepthCellConeViolations(
 		depthCells[i].hitPoints[0] = fixedPoint;
 		depthCells[i].distance =
 			(fixedPoint - depthCells[i].cellCenter).dot(direction);
+		depthCells[i].isMovedForward = false;
+		depthCells[i].isBiharmonicWhiteMagentaBoundActive = false;
 		// depthCells[i].clampedDistance = depthCells[i].distance;
 		depthCells[i].hasClampedHit = true;
 	});
@@ -96,6 +98,8 @@ static std::vector<CellData> makeDepthCells(
 	const vcl::Point3d& direction,
 	const GridChoice& grid,
 	double coneCosThreshold,
+	double magentaAngleDegrees,
+	vcl::uint magentaCellInterval,
 	float eps,
 	const std::string&         debugResultsSubdir = "",
 	double maxDistance = std::numeric_limits<double>::infinity(),
@@ -175,6 +179,7 @@ static std::vector<CellData> makeDepthCells(
 			*debugStepIndex);
 	}
 
+	// First resolve the existing white caps before adding sparse magenta bounds.
 	depthCells =
 		biharmonicFillWhiteCells(
 			surfaceCells,
@@ -183,6 +188,19 @@ static std::vector<CellData> makeDepthCells(
 			direction,
 			eps,
 			maxDistance);
+
+	// Re-solve with points placed at the configured interval from the orange box.
+	depthCells =
+		biharmonicFillWhiteCells(
+			surfaceCells,
+			depthCells,
+			grid,
+			direction,
+			eps,
+			maxDistance,
+			true,
+			magentaAngleDegrees,
+			magentaCellInterval);
 	
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 12
@@ -192,15 +210,17 @@ static std::vector<CellData> makeDepthCells(
 			*debugStepIndex);
 	}
 
-	// Remember which white cells entered this pass as forward-capped cyan.
+	// Preserve white cells constrained by either the cyan or magenta upper cap
+	// during the following hit-cell pass.
 	std::vector<unsigned char> cyanCells(depthCells.size(), false);
 	for (uint idx = 0; idx < surfaceCells.size(); ++idx) {
 		cyanCells[idx] =
-			biharmonicIsWhiteForwardCapCandidate(
-				surfaceCells,
-				depthCells,
-				idx) &&
-			depthCells[idx].isMovedForward;
+			depthCells[idx].hasBiharmonicWhiteMagentaBound ||
+			(biharmonicIsWhiteForwardCapCandidate(
+				 surfaceCells,
+				 depthCells,
+				 idx) &&
+			 depthCells[idx].isMovedForward);
 	}
 
 	depthCells = biharmonicFillHitCells(

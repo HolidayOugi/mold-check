@@ -24,15 +24,23 @@ static void addColoredPoint(
 
 static vcl::Color moldCheckCellDebugColor(const CellData& cell)
 {
+	if (!cell.hasHit && cell.isMovedForward) {
+		return vcl::Color::Cyan;
+	}
+
+	if (cell.isBiharmonicWhiteMagentaBoundActive) {
+		return vcl::Color(255, 192, 203);
+	}
+
+	if (cell.hasBiharmonicWhiteMagentaBound) {
+		return vcl::Color::Magenta;
+	}
+
 	if (cell.hasClampedHit) {
 		return vcl::Color::Green;
 	}
 
 	if (!cell.hasHit) {
-		if (cell.isMovedForward) {
-			return vcl::Color::Cyan;
-		}
-
 		return vcl::Color::White;
 	}
 
