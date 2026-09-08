@@ -835,7 +835,7 @@ static double biharmonicWhiteForwardCapDistance(
 
 	// Tunable height offset parameters, expressed as fractions of maxDistance.
 	const double BiharmonicWhiteHeightMaxFraction = 0.15;
-	const double BiharmonicWhiteHeightGrowthPerCellFraction = 0.005;
+	const double BiharmonicWhiteHeightGrowthPerCellFraction = 3.0 * (0.4/maxDistance);
 	const double BiHarmonicWhiteHeightOffset = 0.01;
 
 	const vcl::uint invalidDistance = biharmonicInvalidBoundaryDistance();

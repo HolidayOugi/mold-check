@@ -34,7 +34,7 @@ struct CellData
 	bool isBiharmonicFilledHit = false; // true if the cell is filled by biharmonic interpolation
 	bool isMovedForward = false; // cyan points
 	bool hasBiharmonicWhiteMagentaBound = false; // sparse magenta upper-bound constraint
-	bool isBiharmonicWhiteMagentaBoundActive = false; // pink points touching the magenta upper bound
+	bool isBiharmonicWhiteMagentaBoundActive = false; // dark yellow points touching the magenta upper bound
 	double biharmonicWhiteMagentaUpperBound = std::numeric_limits<double>::infinity();
 	bool isDiscarded = false; // points outside box constraints
 	bool isInside = false; // inside the mesh, used for biharmonic interpolation
