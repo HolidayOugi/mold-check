@@ -575,8 +575,10 @@ static BiharmonicSolveResult biharmonicSolveUnconstrained(
 		Eigen::SparseMatrix<double>,
 		Eigen::Lower | Eigen::Upper> solver;
 	solver.setTolerance(1e-8);
-	solver.setMaxIterations(
-		static_cast<int>(std::max<size_t>(1000, variableCount * 2)));
+	const size_t requestedIterations =
+		std::max<size_t>(1000, variableCount * 2);
+	solver.setMaxIterations(static_cast<int>(
+		std::min<size_t>(30000, requestedIterations)));
 	solver.compute(linearSystem.system);
 
 	if (solver.info() != Eigen::Success) {
@@ -823,6 +825,7 @@ static std::vector<vcl::uint> biharmonicWhiteBoundaryDistances(
 static double biharmonicWhiteForwardCapDistance(
 	const std::vector<CellData>& cells,
 	vcl::uint cellIdx,
+	const GridChoice& grid,
 	double maxDistance,
 	const std::vector<vcl::uint>& whiteBoundaryDistances)
 {
@@ -833,25 +836,20 @@ static double biharmonicWhiteForwardCapDistance(
 		return std::numeric_limits<double>::infinity();
 	}
 
-	// Tunable height offset parameters, expressed as fractions of maxDistance.
-	const double BiharmonicWhiteHeightMaxFraction = 0.15;
-	const double BiharmonicWhiteHeightGrowthPerCellFraction = 3.0 * (0.4/maxDistance);
-	const double BiHarmonicWhiteHeightOffset = 0.01;
-
 	const vcl::uint invalidDistance = biharmonicInvalidBoundaryDistance();
 	const vcl::uint boundaryDistance = whiteBoundaryDistances[cellIdx];
 	if (boundaryDistance == invalidDistance) {
 		return std::numeric_limits<double>::infinity();
 	}
 
-	const double maximumHeight =
-		BiharmonicWhiteHeightMaxFraction * maxDistance;
+	const double maximumHeight = 0.15 * maxDistance;
+	const double heightOffset = 0.01 * maxDistance;
 	const double heightGrowthPerCell =
-		BiharmonicWhiteHeightGrowthPerCellFraction * maxDistance;
-	const double heightOffset = BiHarmonicWhiteHeightOffset * maxDistance;
+		3.0 * std::min(grid.sideU, grid.sideV);
 	const double height = std::min(
 		maximumHeight,
-		(heightOffset + static_cast<double>(boundaryDistance) * heightGrowthPerCell));
+		heightOffset +
+			static_cast<double>(boundaryDistance) * heightGrowthPerCell);
 	return cells[cellIdx].distance - height;
 }
 
@@ -1490,6 +1488,7 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 				biharmonicWhiteForwardCapDistance(
 					cells,
 					cellIdx,
+					grid,
 					maxDistance,
 					whiteBoundaryDistances);
 		}
@@ -1544,6 +1543,7 @@ static BiharmonicBounds biharmonicBuildHitBounds(
 					biharmonicWhiteForwardCapDistance(
 						cells,
 						cellIdx,
+						grid,
 						maxDistance,
 						whiteBoundaryDistances);
 			}
@@ -1685,6 +1685,7 @@ static void biharmonicApplyWhiteSolution(
 				biharmonicWhiteForwardCapDistance(
 					cells,
 					cellIdx,
+					grid,
 					maxDistance,
 					whiteBoundaryDistances) :
 				std::numeric_limits<double>::infinity();
@@ -1773,6 +1774,7 @@ static void biharmonicApplyHitSolution(
 				biharmonicWhiteForwardCapDistance(
 					cells,
 					cellIdx,
+					grid,
 					maxDistance,
 					whiteBoundaryDistances);
 			const double activeTolerance = std::max(
