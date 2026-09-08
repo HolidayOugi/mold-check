@@ -1011,78 +1011,6 @@ static vcl::uint biharmonicNearestOrangeOnDiagonal(
 	return nearestIdx;
 }
 
-static void biharmonicAddDiagonalMagentaChain(
-	const std::vector<CellData>& cells,
-	const std::vector<CellData>& depthCells,
-	const GridChoice& grid,
-	const vcl::Point3d& direction,
-	double angleCotangent,
-	vcl::uint magentaCellInterval,
-	double eps,
-	const std::vector<vcl::uint>& orangeCells,
-	vcl::uint cornerRow,
-	vcl::uint cornerCol,
-	bool towardLowerRows,
-	bool towardLowerCols,
-	BiharmonicWhiteMagentaBounds& bounds)
-{
-	const vcl::uint invalidIdx = std::numeric_limits<vcl::uint>::max();
-	vcl::uint row = cornerRow;
-	vcl::uint col = cornerCol;
-	vcl::uint sourceIdx = invalidIdx;
-	double sourceUpperBound = 0.0;
-	while (true) {
-		if ((towardLowerRows && row < magentaCellInterval) ||
-			(!towardLowerRows &&
-			 grid.rows - 1 - row < magentaCellInterval) ||
-			(towardLowerCols && col < magentaCellInterval) ||
-			(!towardLowerCols &&
-			 grid.cols - 1 - col < magentaCellInterval)) {
-			break;
-		}
-
-		const vcl::uint targetRow = towardLowerRows ?
-			row - magentaCellInterval : row + magentaCellInterval;
-		const vcl::uint targetCol = towardLowerCols ?
-			col - magentaCellInterval : col + magentaCellInterval;
-		const vcl::uint targetIdx = targetRow * grid.cols + targetCol;
-		if (sourceIdx == invalidIdx) {
-			sourceIdx = biharmonicNearestOrangeOnDiagonal(
-				orangeCells,
-				depthCells,
-				grid,
-				targetRow,
-				targetCol,
-				towardLowerRows,
-				towardLowerCols);
-			if (sourceIdx == invalidIdx) {
-				break;
-			}
-			sourceUpperBound = depthCells[sourceIdx].distance;
-		}
-
-		double targetUpperBound = 0.0;
-		if (!biharmonicAddMagentaPoint(
-				cells,
-				depthCells,
-				sourceIdx,
-				sourceUpperBound,
-				targetIdx,
-				direction,
-				angleCotangent,
-				eps,
-				bounds,
-				targetUpperBound)) {
-			break;
-		}
-
-		row = targetRow;
-		col = targetCol;
-		sourceIdx = targetIdx;
-		sourceUpperBound = targetUpperBound;
-	}
-}
-
 // Build a bounding box from orange cells only. Starting at its edges, sample
 // rows and columns at the configured interval, then place magenta points at
 // that interval outside the box, including four diagonal chains. The first
@@ -1131,6 +1059,7 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 	std::vector<std::vector<uint>> orangeByCol(grid.cols);
 	std::vector<uint> orangeCells;
 
+	//get bounding box
 	for (uint idx = 0; idx < depthCells.size(); ++idx) {
 		if (!biharmonicIsOrangeCell(depthCells, idx)) {
 			continue;
@@ -1153,17 +1082,22 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 		return bounds;
 	}
 
-	// Horizontal chains start from the left/right bounding-box borders. Rows
-	// are sampled at the same interval, so a vertical band is not continuous.
+	// Horizontal chains start from the left/right bounding-box borders.
 	for (uint row = minOrangeRow; row <= maxOrangeRow;) {
 		if (!orangeByRow[row].empty()) {
 			uint sourceIdx = invalidIdx;
 			double sourceUpperBound = 0.0;
+
+			//start from left side of bounding box and move left
 			for (uint col = minOrangeCol;
 				 col >= magentaCellInterval;
 				 col -= magentaCellInterval) {
+
+				//select magenta point at the left of the bounding box
 				const uint targetCol = col - magentaCellInterval;
 				const uint targetIdx = row * grid.cols + targetCol;
+
+				//if first magenta point, find nearest orange point on the same row
 				if (sourceIdx == invalidIdx) {
 					sourceIdx = biharmonicNearestOrange(
 						orangeByRow[row],
@@ -1173,6 +1107,8 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 						targetCol);
 					sourceUpperBound = depthCells[sourceIdx].distance;
 				}
+
+				//set upper bound for the target magenta point based on the source point
 				double targetUpperBound = 0.0;
 				if (!biharmonicAddMagentaPoint(
 						cells,
@@ -1187,12 +1123,16 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 						targetUpperBound)) {
 					break;
 				}
+
+				//set the source point to the target point for the next iteration
 				sourceIdx = targetIdx;
 				sourceUpperBound = targetUpperBound;
 			}
 
 			sourceIdx = invalidIdx;
 			sourceUpperBound = 0.0;
+
+			//right side of bounding box and move right, same logic as above
 			for (uint col = maxOrangeCol;
 				 grid.cols - 1 - col >= magentaCellInterval;
 				 col += magentaCellInterval) {
@@ -1232,8 +1172,8 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 		row += magentaCellInterval;
 	}
 
-	// Vertical chains start from the top/bottom bounding-box borders. Columns
-	// are sampled at the same interval, so a horizontal band is not continuous.
+	// Vertical chains start from the top/bottom bounding-box borders.
+	// same logic as horizontal chains, but iterate over columns instead of rows
 	for (uint col = minOrangeCol; col <= maxOrangeCol;) {
 		if (!orangeByCol[col].empty()) {
 			uint sourceIdx = invalidIdx;
@@ -1311,64 +1251,205 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 		col += magentaCellInterval;
 	}
 
-	// Add the four diagonal chains. Only the first point uses the nearest
-	// orange on that diagonal; every later point uses the previous magenta.
-	biharmonicAddDiagonalMagentaChain(
-		cells,
-		depthCells,
-		grid,
-		direction,
-		angleCotangent,
-		magentaCellInterval,
-		eps,
-		orangeCells,
-		minOrangeRow,
-		minOrangeCol,
-		true,
-		true,
-		bounds);
-	biharmonicAddDiagonalMagentaChain(
-		cells,
-		depthCells,
-		grid,
-		direction,
-		angleCotangent,
-		magentaCellInterval,
-		eps,
-		orangeCells,
-		minOrangeRow,
-		maxOrangeCol,
-		true,
-		false,
-		bounds);
-	biharmonicAddDiagonalMagentaChain(
-		cells,
-		depthCells,
-		grid,
-		direction,
-		angleCotangent,
-		magentaCellInterval,
-		eps,
-		orangeCells,
-		maxOrangeRow,
-		minOrangeCol,
-		false,
-		true,
-		bounds);
-	biharmonicAddDiagonalMagentaChain(
-		cells,
-		depthCells,
-		grid,
-		direction,
-		angleCotangent,
-		magentaCellInterval,
-		eps,
-		orangeCells,
-		maxOrangeRow,
-		maxOrangeCol,
-		false,
-		false,
-		bounds);
+	// Top-left diagonal chain starts from the corresponding bounding-box
+	// corner. Its first point uses the nearest orange on the same diagonal;
+	// every later point uses the preceding magenta upper bound.
+	{
+		uint row = minOrangeRow;
+		uint col = minOrangeCol;
+		uint sourceIdx = invalidIdx;
+		double sourceUpperBound = 0.0;
+		while (row >= magentaCellInterval &&
+			col >= magentaCellInterval) {
+			const uint targetRow = row - magentaCellInterval;
+			const uint targetCol = col - magentaCellInterval;
+			const uint targetIdx = targetRow * grid.cols + targetCol;
+			if (sourceIdx == invalidIdx) {
+				sourceIdx = biharmonicNearestOrangeOnDiagonal(
+					orangeCells,
+					depthCells,
+					grid,
+					targetRow,
+					targetCol,
+					true,
+					true);
+				if (sourceIdx == invalidIdx) {
+					break;
+				}
+				sourceUpperBound = depthCells[sourceIdx].distance;
+			}
+
+			double targetUpperBound = 0.0;
+			if (!biharmonicAddMagentaPoint(
+					cells,
+					depthCells,
+					sourceIdx,
+					sourceUpperBound,
+					targetIdx,
+					direction,
+					angleCotangent,
+					eps,
+					bounds,
+					targetUpperBound)) {
+				break;
+			}
+
+			row = targetRow;
+			col = targetCol;
+			sourceIdx = targetIdx;
+			sourceUpperBound = targetUpperBound;
+		}
+	}
+
+	// Top-right diagonal chain starts from the corresponding bounding-box
+	// corner. Its first point uses the nearest orange on the same diagonal;
+	// every later point uses the preceding magenta upper bound.
+	{
+		uint row = minOrangeRow;
+		uint col = maxOrangeCol;
+		uint sourceIdx = invalidIdx;
+		double sourceUpperBound = 0.0;
+		while (row >= magentaCellInterval &&
+			grid.cols - 1 - col >= magentaCellInterval) {
+			const uint targetRow = row - magentaCellInterval;
+			const uint targetCol = col + magentaCellInterval;
+			const uint targetIdx = targetRow * grid.cols + targetCol;
+			if (sourceIdx == invalidIdx) {
+				sourceIdx = biharmonicNearestOrangeOnDiagonal(
+					orangeCells,
+					depthCells,
+					grid,
+					targetRow,
+					targetCol,
+					true,
+					false);
+				if (sourceIdx == invalidIdx) {
+					break;
+				}
+				sourceUpperBound = depthCells[sourceIdx].distance;
+			}
+
+			double targetUpperBound = 0.0;
+			if (!biharmonicAddMagentaPoint(
+					cells,
+					depthCells,
+					sourceIdx,
+					sourceUpperBound,
+					targetIdx,
+					direction,
+					angleCotangent,
+					eps,
+					bounds,
+					targetUpperBound)) {
+				break;
+			}
+
+			row = targetRow;
+			col = targetCol;
+			sourceIdx = targetIdx;
+			sourceUpperBound = targetUpperBound;
+		}
+	}
+
+	// Bottom-left diagonal chain starts from the corresponding bounding-box
+	// corner. Its first point uses the nearest orange on the same diagonal;
+	// every later point uses the preceding magenta upper bound.
+	{
+		uint row = maxOrangeRow;
+		uint col = minOrangeCol;
+		uint sourceIdx = invalidIdx;
+		double sourceUpperBound = 0.0;
+		while (grid.rows - 1 - row >= magentaCellInterval &&
+			col >= magentaCellInterval) {
+			const uint targetRow = row + magentaCellInterval;
+			const uint targetCol = col - magentaCellInterval;
+			const uint targetIdx = targetRow * grid.cols + targetCol;
+			if (sourceIdx == invalidIdx) {
+				sourceIdx = biharmonicNearestOrangeOnDiagonal(
+					orangeCells,
+					depthCells,
+					grid,
+					targetRow,
+					targetCol,
+					false,
+					true);
+				if (sourceIdx == invalidIdx) {
+					break;
+				}
+				sourceUpperBound = depthCells[sourceIdx].distance;
+			}
+
+			double targetUpperBound = 0.0;
+			if (!biharmonicAddMagentaPoint(
+					cells,
+					depthCells,
+					sourceIdx,
+					sourceUpperBound,
+					targetIdx,
+					direction,
+					angleCotangent,
+					eps,
+					bounds,
+					targetUpperBound)) {
+				break;
+			}
+
+			row = targetRow;
+			col = targetCol;
+			sourceIdx = targetIdx;
+			sourceUpperBound = targetUpperBound;
+		}
+	}
+
+	// Bottom-right diagonal chain starts from the corresponding bounding-box
+	// corner. Its first point uses the nearest orange on the same diagonal;
+	// every later point uses the preceding magenta upper bound.
+	{
+		uint row = maxOrangeRow;
+		uint col = maxOrangeCol;
+		uint sourceIdx = invalidIdx;
+		double sourceUpperBound = 0.0;
+		while (grid.rows - 1 - row >= magentaCellInterval &&
+			grid.cols - 1 - col >= magentaCellInterval) {
+			const uint targetRow = row + magentaCellInterval;
+			const uint targetCol = col + magentaCellInterval;
+			const uint targetIdx = targetRow * grid.cols + targetCol;
+			if (sourceIdx == invalidIdx) {
+				sourceIdx = biharmonicNearestOrangeOnDiagonal(
+					orangeCells,
+					depthCells,
+					grid,
+					targetRow,
+					targetCol,
+					false,
+					false);
+				if (sourceIdx == invalidIdx) {
+					break;
+				}
+				sourceUpperBound = depthCells[sourceIdx].distance;
+			}
+
+			double targetUpperBound = 0.0;
+			if (!biharmonicAddMagentaPoint(
+					cells,
+					depthCells,
+					sourceIdx,
+					sourceUpperBound,
+					targetIdx,
+					direction,
+					angleCotangent,
+					eps,
+					bounds,
+					targetUpperBound)) {
+				break;
+			}
+
+			row = targetRow;
+			col = targetCol;
+			sourceIdx = targetIdx;
+			sourceUpperBound = targetUpperBound;
+		}
+	}
 
 	return bounds;
 }
@@ -1413,6 +1494,8 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 					whiteBoundaryDistances);
 		}
 
+		//if no cyan bounds are present, magenta bounds are used to constrain the white cells
+		//else, the minimum of the two bounds is used to constrain the white cells
 		if (magentaBounds != nullptr &&
 			cellIdx < magentaBounds->constrained.size() &&
 			magentaBounds->constrained[cellIdx]) {
@@ -1759,19 +1842,20 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 			  << "\n";
 	std::cout.flush();
 
-	const BiharmonicWhiteMagentaBounds magentaBounds =
-		addMagentaBounds ?
-			biharmonicBuildWhiteMagentaBounds(
-				cells,
-				depthCells,
-				grid,
-				direction,
-				magentaAngleDegrees,
-				magentaCellInterval,
-				eps) :
-			BiharmonicWhiteMagentaBounds();
-	const BiharmonicWhiteMagentaBounds* activeMagentaBounds =
-		addMagentaBounds ? &magentaBounds : nullptr;
+	//bounds for magenta cells
+	BiharmonicWhiteMagentaBounds magentaBounds;
+	const BiharmonicWhiteMagentaBounds* activeMagentaBounds = nullptr;
+	if (addMagentaBounds) {
+		magentaBounds = biharmonicBuildWhiteMagentaBounds(
+			cells,
+			depthCells,
+			grid,
+			direction,
+			magentaAngleDegrees,
+			magentaCellInterval,
+			eps);
+		activeMagentaBounds = &magentaBounds;
+	}
 
 	// Build the same biharmonic system used by both passes.
 	const BiharmonicLinearSystem linearSystem =
