@@ -29,7 +29,7 @@ static vcl::Color moldCheckCellDebugColor(const CellData& cell)
 	}
 
 	if (cell.isBiharmonicWhiteMagentaBoundActive) {
-		return vcl::Color(120, 118, 14);
+		return vcl::Color::Blue;
 	}
 
 	if (cell.hasBiharmonicWhiteMagentaBound) {

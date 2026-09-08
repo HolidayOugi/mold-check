@@ -177,6 +177,7 @@ inline MoldCheckMetrics moldCheck(
     updateBoundingBox(m);
 
     const double MAX_DISTANCE = m.boundingBox().diagonal();
+    const size_t MAX_BIHARMONIC_ITERATIONS = 30000;
     const float EPS = 1e-12f * MAX_DISTANCE;
     const float RAY_EPS = 1e-6f * MAX_DISTANCE;
 
@@ -441,6 +442,7 @@ inline MoldCheckMetrics moldCheck(
                 CONE_COS_THRESHOLD,
                 magentaAngleDegrees,
                 magentaCellInterval,
+                MAX_BIHARMONIC_ITERATIONS,
                 EPS,
                 debugResultsSubdir,
                 MAX_DISTANCE,

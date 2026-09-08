@@ -36,6 +36,7 @@ struct BiharmonicSolveResult
 	int iterations = 0;
 	double error = std::numeric_limits<double>::infinity();
 	bool success = false;
+	bool converged = false;
 };
 
 struct BiharmonicBounds
@@ -565,7 +566,8 @@ static BiharmonicLinearSystem biharmonicBuildSystem(
 // Fast path: solve the unconstrained biharmonic system with Eigen CG.
 static BiharmonicSolveResult biharmonicSolveUnconstrained(
 	const BiharmonicLinearSystem& linearSystem,
-	size_t variableCount)
+	size_t variableCount,
+	size_t maximumIterations)
 {
 	BiharmonicSolveResult result;
 	result.distances = Eigen::VectorXd(
@@ -578,7 +580,7 @@ static BiharmonicSolveResult biharmonicSolveUnconstrained(
 	const size_t requestedIterations =
 		std::max<size_t>(1000, variableCount * 2);
 	solver.setMaxIterations(static_cast<int>(
-		std::min<size_t>(30000, requestedIterations)));
+		std::min(maximumIterations, requestedIterations)));
 	solver.compute(linearSystem.system);
 
 	if (solver.info() != Eigen::Success) {
@@ -588,7 +590,11 @@ static BiharmonicSolveResult biharmonicSolveUnconstrained(
 	result.distances = solver.solve(linearSystem.rhs);
 	result.iterations = solver.iterations();
 	result.error = solver.error();
-	result.success = solver.info() == Eigen::Success;
+	const Eigen::ComputationInfo solverInfo = solver.info();
+	result.converged = solverInfo == Eigen::Success;
+	result.success =
+		(result.converged || solverInfo == Eigen::NoConvergence) &&
+		result.distances.allFinite();
 
 	return result;
 }
@@ -617,7 +623,8 @@ static double biharmonicLipschitzUpperBound(
 static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 	const BiharmonicLinearSystem& linearSystem,
 	const Eigen::VectorXd& initialDistances,
-	const BiharmonicBounds& bounds)
+	const BiharmonicBounds& bounds,
+	size_t maximumIterations)
 {
 	BiharmonicSolveResult result;
 	result.distances = initialDistances;
@@ -639,10 +646,10 @@ static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 	// Match the normal CG budget scale, then cap it to avoid runaway solves.
 	const size_t requestedIterations =
 		std::max<size_t>(1000, static_cast<size_t>(result.distances.size()) * 2);
-	const int maximumIterations = static_cast<int>(
-		std::min<size_t>(30000, requestedIterations));
+	const int activeMaximumIterations = static_cast<int>(
+		std::min(maximumIterations, requestedIterations));
 
-	for (; result.iterations < maximumIterations; ++result.iterations) {
+	for (; result.iterations < activeMaximumIterations; ++result.iterations) {
 		// Take one descent step and immediately project it into the hard bounds.
 		const Eigen::VectorXd gradient =
 			linearSystem.system * acceleratedDistances -
@@ -687,6 +694,7 @@ static BiharmonicSolveResult biharmonicSolveBoxConstrained(
 		(projectedDistances - result.distances).norm() /
 		std::max(1.0, result.distances.norm());
 	result.success = true;
+	result.converged = result.error <= 1e-8;
 
 	return result;
 }
@@ -1011,9 +1019,8 @@ static vcl::uint biharmonicNearestOrangeOnDiagonal(
 
 // Build a bounding box from orange cells only. Starting at its edges, sample
 // rows and columns at the configured interval, then place magenta points at
-// that interval outside the box, including four diagonal chains. The first
-// magenta of each chain starts from the geometrically nearest orange on the
-// same row, column, or diagonal; later points start from the previous magenta.
+// that interval outside the box. The four corner diagonals are expanded into
+// lattices using their row and column upper bounds.
 static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 	const std::vector<CellData>& cells,
 	const std::vector<CellData>& depthCells,
@@ -1297,6 +1304,71 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 			sourceIdx = targetIdx;
 			sourceUpperBound = targetUpperBound;
 		}
+
+		// Fill the top-left corner on the same interval grid.
+		const uint rowStepCount = minOrangeRow / magentaCellInterval;
+		const uint colStepCount = minOrangeCol / magentaCellInterval;
+		const uint diagonalStepCount =
+			std::min(rowStepCount, colStepCount);
+		for (uint rowStep = 1; rowStep <= rowStepCount; ++rowStep) {
+			const uint targetRow =
+				minOrangeRow - rowStep * magentaCellInterval;
+			for (uint colStep = 1; colStep <= colStepCount; ++colStep) {
+				if (rowStep == colStep ||
+					(rowStep > diagonalStepCount &&
+					 colStep > diagonalStepCount)) {
+					continue;
+				}
+
+				const uint targetCol =
+					minOrangeCol - colStep * magentaCellInterval;
+				const uint targetIdx = targetRow * grid.cols + targetCol;
+				if (!biharmonicIsMagentaTarget(
+						cells, depthCells, targetIdx)) {
+					continue;
+				}
+
+				double targetUpperBound = 0.0;
+				if (rowStep <= diagonalStepCount) {
+					const uint rowSourceCol =
+						minOrangeCol - rowStep * magentaCellInterval;
+					const uint rowSourceIdx =
+						targetRow * grid.cols + rowSourceCol;
+					if (bounds.constrained[rowSourceIdx]) {
+						biharmonicAddMagentaPoint(
+							cells,
+							depthCells,
+							rowSourceIdx,
+							bounds.upper[rowSourceIdx],
+							targetIdx,
+							direction,
+							angleCotangent,
+							eps,
+							bounds,
+							targetUpperBound);
+					}
+				}
+				if (colStep <= diagonalStepCount) {
+					const uint colSourceRow =
+						minOrangeRow - colStep * magentaCellInterval;
+					const uint colSourceIdx =
+						colSourceRow * grid.cols + targetCol;
+					if (bounds.constrained[colSourceIdx]) {
+						biharmonicAddMagentaPoint(
+							cells,
+							depthCells,
+							colSourceIdx,
+							bounds.upper[colSourceIdx],
+							targetIdx,
+							direction,
+							angleCotangent,
+							eps,
+							bounds,
+							targetUpperBound);
+					}
+				}
+			}
+		}
 	}
 
 	// Top-right diagonal chain starts from the corresponding bounding-box
@@ -1346,6 +1418,72 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 			col = targetCol;
 			sourceIdx = targetIdx;
 			sourceUpperBound = targetUpperBound;
+		}
+
+		// Fill the top-right corner on the same interval grid.
+		const uint rowStepCount = minOrangeRow / magentaCellInterval;
+		const uint colStepCount =
+			(grid.cols - 1 - maxOrangeCol) / magentaCellInterval;
+		const uint diagonalStepCount =
+			std::min(rowStepCount, colStepCount);
+		for (uint rowStep = 1; rowStep <= rowStepCount; ++rowStep) {
+			const uint targetRow =
+				minOrangeRow - rowStep * magentaCellInterval;
+			for (uint colStep = 1; colStep <= colStepCount; ++colStep) {
+				if (rowStep == colStep ||
+					(rowStep > diagonalStepCount &&
+					 colStep > diagonalStepCount)) {
+					continue;
+				}
+
+				const uint targetCol =
+					maxOrangeCol + colStep * magentaCellInterval;
+				const uint targetIdx = targetRow * grid.cols + targetCol;
+				if (!biharmonicIsMagentaTarget(
+						cells, depthCells, targetIdx)) {
+					continue;
+				}
+
+				double targetUpperBound = 0.0;
+				if (rowStep <= diagonalStepCount) {
+					const uint rowSourceCol =
+						maxOrangeCol + rowStep * magentaCellInterval;
+					const uint rowSourceIdx =
+						targetRow * grid.cols + rowSourceCol;
+					if (bounds.constrained[rowSourceIdx]) {
+						biharmonicAddMagentaPoint(
+							cells,
+							depthCells,
+							rowSourceIdx,
+							bounds.upper[rowSourceIdx],
+							targetIdx,
+							direction,
+							angleCotangent,
+							eps,
+							bounds,
+							targetUpperBound);
+					}
+				}
+				if (colStep <= diagonalStepCount) {
+					const uint colSourceRow =
+						minOrangeRow - colStep * magentaCellInterval;
+					const uint colSourceIdx =
+						colSourceRow * grid.cols + targetCol;
+					if (bounds.constrained[colSourceIdx]) {
+						biharmonicAddMagentaPoint(
+							cells,
+							depthCells,
+							colSourceIdx,
+							bounds.upper[colSourceIdx],
+							targetIdx,
+							direction,
+							angleCotangent,
+							eps,
+							bounds,
+							targetUpperBound);
+					}
+				}
+			}
 		}
 	}
 
@@ -1397,6 +1535,72 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 			sourceIdx = targetIdx;
 			sourceUpperBound = targetUpperBound;
 		}
+
+		// Fill the bottom-left corner on the same interval grid.
+		const uint rowStepCount =
+			(grid.rows - 1 - maxOrangeRow) / magentaCellInterval;
+		const uint colStepCount = minOrangeCol / magentaCellInterval;
+		const uint diagonalStepCount =
+			std::min(rowStepCount, colStepCount);
+		for (uint rowStep = 1; rowStep <= rowStepCount; ++rowStep) {
+			const uint targetRow =
+				maxOrangeRow + rowStep * magentaCellInterval;
+			for (uint colStep = 1; colStep <= colStepCount; ++colStep) {
+				if (rowStep == colStep ||
+					(rowStep > diagonalStepCount &&
+					 colStep > diagonalStepCount)) {
+					continue;
+				}
+
+				const uint targetCol =
+					minOrangeCol - colStep * magentaCellInterval;
+				const uint targetIdx = targetRow * grid.cols + targetCol;
+				if (!biharmonicIsMagentaTarget(
+						cells, depthCells, targetIdx)) {
+					continue;
+				}
+
+				double targetUpperBound = 0.0;
+				if (rowStep <= diagonalStepCount) {
+					const uint rowSourceCol =
+						minOrangeCol - rowStep * magentaCellInterval;
+					const uint rowSourceIdx =
+						targetRow * grid.cols + rowSourceCol;
+					if (bounds.constrained[rowSourceIdx]) {
+						biharmonicAddMagentaPoint(
+							cells,
+							depthCells,
+							rowSourceIdx,
+							bounds.upper[rowSourceIdx],
+							targetIdx,
+							direction,
+							angleCotangent,
+							eps,
+							bounds,
+							targetUpperBound);
+					}
+				}
+				if (colStep <= diagonalStepCount) {
+					const uint colSourceRow =
+						maxOrangeRow + colStep * magentaCellInterval;
+					const uint colSourceIdx =
+						colSourceRow * grid.cols + targetCol;
+					if (bounds.constrained[colSourceIdx]) {
+						biharmonicAddMagentaPoint(
+							cells,
+							depthCells,
+							colSourceIdx,
+							bounds.upper[colSourceIdx],
+							targetIdx,
+							direction,
+							angleCotangent,
+							eps,
+							bounds,
+							targetUpperBound);
+					}
+				}
+			}
+		}
 	}
 
 	// Bottom-right diagonal chain starts from the corresponding bounding-box
@@ -1447,6 +1651,73 @@ static BiharmonicWhiteMagentaBounds biharmonicBuildWhiteMagentaBounds(
 			sourceIdx = targetIdx;
 			sourceUpperBound = targetUpperBound;
 		}
+
+		// Fill the bottom-right corner on the same interval grid.
+		const uint rowStepCount =
+			(grid.rows - 1 - maxOrangeRow) / magentaCellInterval;
+		const uint colStepCount =
+			(grid.cols - 1 - maxOrangeCol) / magentaCellInterval;
+		const uint diagonalStepCount =
+			std::min(rowStepCount, colStepCount);
+		for (uint rowStep = 1; rowStep <= rowStepCount; ++rowStep) {
+			const uint targetRow =
+				maxOrangeRow + rowStep * magentaCellInterval;
+			for (uint colStep = 1; colStep <= colStepCount; ++colStep) {
+				if (rowStep == colStep ||
+					(rowStep > diagonalStepCount &&
+					 colStep > diagonalStepCount)) {
+					continue;
+				}
+
+				const uint targetCol =
+					maxOrangeCol + colStep * magentaCellInterval;
+				const uint targetIdx = targetRow * grid.cols + targetCol;
+				if (!biharmonicIsMagentaTarget(
+						cells, depthCells, targetIdx)) {
+					continue;
+				}
+
+				double targetUpperBound = 0.0;
+				if (rowStep <= diagonalStepCount) {
+					const uint rowSourceCol =
+						maxOrangeCol + rowStep * magentaCellInterval;
+					const uint rowSourceIdx =
+						targetRow * grid.cols + rowSourceCol;
+					if (bounds.constrained[rowSourceIdx]) {
+						biharmonicAddMagentaPoint(
+							cells,
+							depthCells,
+							rowSourceIdx,
+							bounds.upper[rowSourceIdx],
+							targetIdx,
+							direction,
+							angleCotangent,
+							eps,
+							bounds,
+							targetUpperBound);
+					}
+				}
+				if (colStep <= diagonalStepCount) {
+					const uint colSourceRow =
+						maxOrangeRow + colStep * magentaCellInterval;
+					const uint colSourceIdx =
+						colSourceRow * grid.cols + targetCol;
+					if (bounds.constrained[colSourceIdx]) {
+						biharmonicAddMagentaPoint(
+							cells,
+							depthCells,
+							colSourceIdx,
+							bounds.upper[colSourceIdx],
+							targetIdx,
+							direction,
+							angleCotangent,
+							eps,
+							bounds,
+							targetUpperBound);
+					}
+				}
+			}
+		}
 	}
 
 	return bounds;
@@ -1458,13 +1729,17 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 	const std::vector<vcl::uint>& variableCellIds,
 	const GridChoice& grid,
 	const BiharmonicLinearSystem& linearSystem,
+	size_t maximumIterations,
 	double maxDistance,
 	const BiharmonicWhiteMagentaBounds* magentaBounds)
 {
 	const size_t variableCount = variableCellIds.size();
 
 	if (!std::isfinite(maxDistance)) {
-		return biharmonicSolveUnconstrained(linearSystem, variableCount);
+		return biharmonicSolveUnconstrained(
+			linearSystem,
+			variableCount,
+			maximumIterations);
 	}
 
 	BiharmonicBounds bounds =
@@ -1506,7 +1781,8 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 	return biharmonicSolveBoxConstrained(
 		linearSystem,
 		initialDistances,
-		bounds);
+		bounds,
+		maximumIterations);
 }
 // Build hard bounds that keep inside orange points safely inside the mesh.
 static BiharmonicBounds biharmonicBuildHitBounds(
@@ -1815,6 +2091,7 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 	const GridChoice& grid,
 	const vcl::Point3d& direction,
 	double eps,
+	size_t maximumIterations,
 	double maxDistance = std::numeric_limits<double>::infinity(),
 	bool addMagentaBounds = false,
 	double magentaAngleDegrees = 45.0,
@@ -1869,7 +2146,7 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 			selection.fixedCellIds,
 			eps);
 
-	std::cout << "  biharmonic sparse solve start\n";
+	std::cout << "  biharmonic white sparse solve start\n";
 	std::cout.flush();
 
 	const BiharmonicSolveResult solveResult =
@@ -1879,14 +2156,23 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 			selection.variableCellIds,
 			grid,
 			linearSystem,
+			maximumIterations,
 			maxDistance,
 			activeMagentaBounds);
 
 	if (!solveResult.success) {
+		std::cout << "  biharmonic white sparse solve failed. Iterations: "
+				  << solveResult.iterations
+				  << ", error: " << solveResult.error << "\n";
+		std::cout.flush();
 		return depthCells;
 	}
 
-	std::cout << "  biharmonic sparse solve done. Iterations: "
+	std::cout << "  biharmonic white sparse solve "
+			  << (solveResult.converged ?
+					"done" :
+					"stopped at iteration limit")
+			  << ". Iterations: "
 			  << solveResult.iterations
 			  << ", error: " << solveResult.error << "\n";
 	std::cout.flush();
@@ -1903,7 +2189,7 @@ static std::vector<CellData> biharmonicFillWhiteCells(
 		maxDistance,
 		activeMagentaBounds);
 
-	std::cout << "  biharmonic done\n";
+	std::cout << "  biharmonic white done\n";
 	std::cout.flush();
 
 	return depthCells;
@@ -1916,6 +2202,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 	const vcl::Point3d& direction,
 	double eps,
 	vcl::uint collarRadius,
+	size_t maximumIterations,
 	double maxDistance = std::numeric_limits<double>::infinity(),
 	const std::vector<unsigned char>* cyanCells = nullptr)
 {
@@ -1952,7 +2239,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 		return depthCells;
 	}
 
-	std::cout << "  biharmonic unknown cells: "
+	std::cout << "  biharmonic orange cells. Unknown cells: "
 			  << selection.variableCellIds.size()
 			  << ", fixed anchor cells: " << selection.fixedCellIds.size()
 			  << "\n";
@@ -1969,7 +2256,7 @@ static std::vector<CellData> biharmonicFillHitCells(
 			selection.fixedCellIds,
 			eps);
 
-	std::cout << "  biharmonic sparse solve start\n";
+	std::cout << "  biharmonic orange sparse solve start\n";
 	std::cout.flush();
 
 	// Use plain CG unless hard bounds are required by the second pass.
@@ -1977,7 +2264,8 @@ static std::vector<CellData> biharmonicFillHitCells(
 	if (!useBoxConstraints) {
 		solveResult = biharmonicSolveUnconstrained(
 			linearSystem,
-			selection.variableCellIds.size());
+			selection.variableCellIds.size(),
+			maximumIterations);
 	}
 	else {
 		const BiharmonicBounds bounds =
@@ -1997,14 +2285,23 @@ static std::vector<CellData> biharmonicFillHitCells(
 		solveResult = biharmonicSolveBoxConstrained(
 			linearSystem,
 			initialDistances,
-			bounds);
+			bounds,
+			maximumIterations);
 	}
 
 	if (!solveResult.success) {
+		std::cout << "  biharmonic orange sparse solve failed. Iterations: "
+				  << solveResult.iterations
+				  << ", error: " << solveResult.error << "\n";
+		std::cout.flush();
 		return depthCells;
 	}
 
-	std::cout << "  biharmonic sparse solve done. Iterations: "
+	std::cout << "  biharmonic orange sparse solve "
+			  << (solveResult.converged ?
+					"done" :
+					"stopped at iteration limit")
+			  << ". Iterations: "
 			  << solveResult.iterations
 			  << ", error: " << solveResult.error << "\n";
 	std::cout.flush();

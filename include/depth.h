@@ -100,6 +100,7 @@ static std::vector<CellData> makeDepthCells(
 	double coneCosThreshold,
 	double magentaAngleDegrees,
 	vcl::uint magentaCellInterval,
+	size_t maximumBiharmonicIterations,
 	float eps,
 	const std::string&         debugResultsSubdir = "",
 	double maxDistance = std::numeric_limits<double>::infinity(),
@@ -127,7 +128,8 @@ static std::vector<CellData> makeDepthCells(
 			depthCells,
 			grid,
 			direction,
-			eps);
+			eps,
+			maximumBiharmonicIterations);
 
 	if (debugStepIndex != nullptr) {
 		saveMoldCheckStepMesh( // Step 10
@@ -169,6 +171,7 @@ static std::vector<CellData> makeDepthCells(
 		direction,
 		eps,
 		0,
+		maximumBiharmonicIterations,
 		maxDistance);
 
 	if (debugStepIndex != nullptr) {
@@ -187,6 +190,7 @@ static std::vector<CellData> makeDepthCells(
 			grid,
 			direction,
 			eps,
+			maximumBiharmonicIterations,
 			maxDistance,
 			true,
 			magentaAngleDegrees,
@@ -220,6 +224,7 @@ static std::vector<CellData> makeDepthCells(
 		direction,
 		eps,
 		10,
+		maximumBiharmonicIterations,
 		maxDistance,
 		&cyanCells);
 	
@@ -230,6 +235,8 @@ static std::vector<CellData> makeDepthCells(
 			debugResultsSubdir,
 			*debugStepIndex);
 	}
+
+	std::cout << "Fixing possible cone violations...\n";
 
 	depthCells = fixDepthCellConeViolations(depthCells, direction, coneCosThreshold, eps);
 	updateDepthCellInsideFlags(surfaceCells, depthCells, eps);
