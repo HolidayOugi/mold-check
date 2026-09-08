@@ -179,17 +179,7 @@ static std::vector<CellData> makeDepthCells(
 			*debugStepIndex);
 	}
 
-	// First resolve the existing white caps before adding sparse magenta bounds.
-	depthCells =
-		biharmonicFillWhiteCells(
-			surfaceCells,
-			depthCells,
-			grid,
-			direction,
-			eps,
-			maxDistance);
-
-	// Re-solve with points placed at the configured interval from the orange box.
+	// Reconstruct whites from the orange cells in one solve. 
 	depthCells =
 		biharmonicFillWhiteCells(
 			surfaceCells,

@@ -1494,8 +1494,7 @@ static BiharmonicSolveResult biharmonicSolveWhiteSystem(
 					whiteBoundaryDistances);
 		}
 
-		//if no cyan bounds are present, magenta bounds are used to constrain the white cells
-		//else, the minimum of the two bounds is used to constrain the white cells
+		// Apply the strictest upper bound when a cell is both cyan and magenta.
 		if (magentaBounds != nullptr &&
 			cellIdx < magentaBounds->constrained.size() &&
 			magentaBounds->constrained[cellIdx]) {
